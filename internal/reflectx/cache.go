@@ -8,6 +8,16 @@ import (
 	"sync"
 )
 
+// Strategy controls how a masked field is transformed.
+type Strategy int
+
+const (
+	RedactStrategy    Strategy = iota // Replace with placeholder (e.g. "[EMAIL]")
+	HashStrategy                      // Replace with SHA-256 hash
+	TokenizeStrategy                  // Replace with stable pseudonym
+	PartialStrategy                   // Partially mask (e.g. "j***@example.com")
+)
+
 // TypeMeta holds precomputed field metadata for a struct type.
 // It is built once per type by parsing struct tags, then cached.
 type TypeMeta struct {
@@ -16,10 +26,9 @@ type TypeMeta struct {
 
 // FieldMeta describes one maskable field in a struct.
 // Index is the reflect field-index path used with reflect.Value.FieldByIndex.
-// Tag is the raw mask tag value (e.g. "email", "secret", "phone").
 type FieldMeta struct {
-	Index []int
-	Tag   string
+	Index    []int
+	Strategy Strategy
 }
 
 // Cache is a thread-safe, write-once-read-many store for
