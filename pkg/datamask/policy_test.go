@@ -31,7 +31,7 @@ func TestComposeEmpty(t *testing.T) {
 
 func TestComposeSingle(t *testing.T) {
 	upper := Policy(func(v any) (any, error) {
-		return Redact(v.(string)), nil
+		return RedactValue(v.(string)), nil
 	})
 
 	p := Compose(upper)

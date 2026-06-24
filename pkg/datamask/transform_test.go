@@ -5,10 +5,10 @@ import (
 	"testing"
 )
 
-func TestRedact(t *testing.T) {
-	got := Redact("anything")
+func TestRedactValue(t *testing.T) {
+	got := RedactValue("anything")
 	if got != "[REDACTED]" {
-		t.Errorf("Redact() = %q, want %q", got, "[REDACTED]")
+		t.Errorf("RedactValue() = %q, want %q", got, "[REDACTED]")
 	}
 }
 
@@ -156,15 +156,15 @@ func TestPartialPreservesSeparators(t *testing.T) {
 
 // Fuzz tests
 
-func FuzzRedact(f *testing.F) {
+func FuzzRedactValue(f *testing.F) {
 	f.Add("hello")
 	f.Add("")
 	f.Add("ghp_abc123def456ghi789jkl012mno345pqr")
 	f.Fuzz(func(t *testing.T, s string) {
 		// Redact must never panic and always return "[REDACTED]".
-		got := Redact(s)
+		got := RedactValue(s)
 		if got != "[REDACTED]" {
-			t.Errorf("Redact(%q) = %q, want [REDACTED]", s, got)
+			t.Errorf("RedactValue(%q) = %q, want [REDACTED]", s, got)
 		}
 	})
 }

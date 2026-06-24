@@ -2,9 +2,44 @@ package datamask
 
 import "testing"
 
+type benchUser struct {
+	Name  string
+	Email string `mask:"email"`
+	Phone string `mask:"phone"`
+	SSN   string `mask:"secret"`
+}
+
 func BenchmarkRedact(b *testing.B) {
+	m := New()
+	user := benchUser{
+		Name:  "John Doe",
+		Email: "john@example.com",
+		Phone: "+1-555-1234",
+		SSN:   "123-45-6789",
+	}
+	b.ResetTimer()
 	for b.Loop() {
-		Redact("john@example.com")
+		_, _ = Redact(m, user)
+	}
+}
+
+func BenchmarkRedactInPlace(b *testing.B) {
+	m := New()
+	b.ResetTimer()
+	for b.Loop() {
+		user := &benchUser{
+			Name:  "John Doe",
+			Email: "john@example.com",
+			Phone: "+1-555-1234",
+			SSN:   "123-45-6789",
+		}
+		_ = m.RedactInPlace(user)
+	}
+}
+
+func BenchmarkRedactValue(b *testing.B) {
+	for b.Loop() {
+		RedactValue("john@example.com")
 	}
 }
 

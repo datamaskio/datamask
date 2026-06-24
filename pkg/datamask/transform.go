@@ -9,8 +9,8 @@ import (
 	"unicode/utf8"
 )
 
-// Redact returns the generic redaction placeholder.
-func Redact(s string) string {
+// RedactValue returns the generic redaction placeholder.
+func RedactValue(s string) string {
 	return "[REDACTED]"
 }
 
