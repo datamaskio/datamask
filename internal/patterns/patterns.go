@@ -17,10 +17,16 @@ func (p *Pattern) Find(s string) []string {
 	return p.re.FindAllString(s, -1)
 }
 
+// FindIndex returns the byte-index pairs of all matches of the pattern in s.
+// Each pair is [start, end). Use this when you need match positions.
+func (p *Pattern) FindIndex(s string) [][]int {
+	return p.re.FindAllStringIndex(s, -1)
+}
+
 // Match reports whether the pattern matches the string s in its entirety.
 // This is stricter than Find — it checks that the whole string is a secret.
 func (p *Pattern) Match(s string) bool {
-	return len(p.re.FindString(s)) == len(s) && len(s) > 0
+	return p.re.MatchString(s) && len(p.re.FindString(s)) == len(s) && len(s) > 0
 }
 
 // Pre-compiled patterns for high-confidence secret formats.
