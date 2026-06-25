@@ -370,6 +370,105 @@ func TestComposedPolicy(t *testing.T) {
 	}
 }
 
+func TestRedactPointerToStringField(t *testing.T) {
+	m := New()
+	type apiConfig struct {
+		Token *string `mask:"secret"`
+	}
+	tok := "my-secret-token"
+	v := apiConfig{Token: &tok}
+
+	masked, err := Redact(m, v)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if *masked.Token != "[REDACTED]" {
+		t.Errorf("Token = %q, want [REDACTED]", *masked.Token)
+	}
+	if *v.Token != "my-secret-token" {
+		t.Error("original *string was mutated")
+	}
+}
+
+func TestRedactNilPointerToString(t *testing.T) {
+	m := New()
+	type apiConfig struct {
+		Token *string `mask:"secret"`
+	}
+	v := apiConfig{Token: nil}
+
+	masked, err := Redact(m, v)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if masked.Token != nil {
+		t.Error("nil *string should remain nil")
+	}
+}
+
+func TestRedactCyclicStruct(t *testing.T) {
+	m := New()
+	type Node struct {
+		Name string `mask:"secret"`
+		Next *Node
+	}
+	node := &Node{Name: "first"}
+	node.Next = node // self-referential
+
+	// Should not stack-overflow.
+	_, err := Redact(m, node)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRedactPIIWithPointerToString(t *testing.T) {
+	m := New()
+	type cfg struct {
+		Name  string
+		Token *string `mask:"secret"`
+	}
+	tok := "sauce"
+	v := cfg{Name: "test", Token: &tok}
+
+	result, _ := m.RedactPII()(v)
+	r := result.(cfg)
+	if *r.Token != "[REDACTED]" {
+		t.Errorf("Token = %q, want [REDACTED]", *r.Token)
+	}
+}
+
+func TestHashEmailsWithPointerToString(t *testing.T) {
+	m := New()
+	type cfg struct {
+		Name  string
+		Token *string `mask:"hash"`
+	}
+	tok := "secret"
+	v := cfg{Name: "test", Token: &tok}
+
+	result, _ := m.HashEmails()(v)
+	r := result.(cfg)
+	if *r.Token == tok {
+		t.Error("Token should be hashed, not same as original")
+	}
+}
+
+func TestRedactTokenizeWithMAC(t *testing.T) {
+	m := New(WithTokenizeKey("my-key"))
+	type rec struct {
+		ID string `mask:"tokenize"`
+	}
+	v := rec{ID: "user-1"}
+	masked, err := Redact(m, v)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if masked.ID == "user-1" {
+		t.Error("ID should be tokenized")
+	}
+}
+
 func TestRedactAny(t *testing.T) {
 	m := New()
 	user := customer{Email: "a@b.com", SSN: "123-45-6789"}

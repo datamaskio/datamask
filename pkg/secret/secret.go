@@ -129,6 +129,10 @@ func truncate(s string) string {
 // on every exported string field. fieldNamePrefix is prepended to the
 // field name for nested structs (e.g. "Address.Zip").
 func walkStruct(v reflect.Value, fieldNamePrefix string, findings *[]Finding) {
+	walkStructVisited(v, fieldNamePrefix, findings, map[uintptr]bool{})
+}
+
+func walkStructVisited(v reflect.Value, fieldNamePrefix string, findings *[]Finding, visited map[uintptr]bool) {
 	t := v.Type()
 	for i := range t.NumField() {
 		f := t.Field(i)
@@ -143,24 +147,32 @@ func walkStruct(v reflect.Value, fieldNamePrefix string, findings *[]Finding) {
 		}
 
 		if f.Anonymous {
-			// Embedded struct — promote its fields.
 			if fv.Kind() == reflect.Pointer {
 				if fv.IsNil() {
 					continue
 				}
+				ptr := fv.Pointer()
+				if visited[ptr] {
+					continue
+				}
+				visited[ptr] = true
 				fv = fv.Elem()
 			}
 			if fv.Kind() == reflect.Struct {
-				walkStruct(fv, fieldNamePrefix, findings)
+				walkStructVisited(fv, fieldNamePrefix, findings, visited)
 			}
 			continue
 		}
 
-		// Dereference pointer fields.
 		if fv.Kind() == reflect.Pointer {
 			if fv.IsNil() {
 				continue
 			}
+			ptr := fv.Pointer()
+			if visited[ptr] {
+				continue
+			}
+			visited[ptr] = true
 			fv = fv.Elem()
 		}
 
@@ -169,8 +181,7 @@ func walkStruct(v reflect.Value, fieldNamePrefix string, findings *[]Finding) {
 			f := detectString(fv.String(), name)
 			*findings = append(*findings, f...)
 		case reflect.Struct:
-			// Recurse into nested (non-anonymous) struct fields.
-			walkStruct(fv, name, findings)
+			walkStructVisited(fv, name, findings, visited)
 		}
 	}
 }

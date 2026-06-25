@@ -338,6 +338,20 @@ func TestDetectNoPanInShortDigitRun(t *testing.T) {
 	}
 }
 
+func TestDetectAllCyclicStruct(t *testing.T) {
+	type Node struct {
+		Name string
+		Next *Node
+	}
+	node := &Node{Name: "first"}
+	node.Next = node
+
+	findings := DetectAll(node)
+	if len(findings) != 0 {
+		t.Logf("findings: %v", findings)
+	}
+}
+
 func FuzzDetect(f *testing.F) {
 	f.Add("hello")
 	f.Add("")

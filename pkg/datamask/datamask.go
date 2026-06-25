@@ -26,6 +26,7 @@ func New(opts ...Option) *Masker {
 	for _, o := range opts {
 		o(&m.cfg)
 	}
+	m.cfg.initTokenizeMAC()
 	return m
 }
 
@@ -50,6 +51,10 @@ func Redact[T any](m *Masker, v T) (T, error) {
 // redact is the type-erased implementation. It handles structs, slices,
 // arrays, and pointers to structs. Maps and other types return an error.
 func (m *Masker) redact(v any) (any, error) {
+	return m.redactVisited(v, map[uintptr]bool{})
+}
+
+func (m *Masker) redactVisited(v any, visited map[uintptr]bool) (any, error) {
 	rv := reflect.ValueOf(v)
 
 	switch rv.Kind() {
@@ -57,17 +62,21 @@ func (m *Masker) redact(v any) (any, error) {
 		if rv.IsNil() {
 			return v, nil
 		}
-		result, err := m.redact(rv.Elem().Interface())
+		ptr := rv.Pointer()
+		if visited[ptr] {
+			return v, nil // cycle detected — return original pointer
+		}
+		visited[ptr] = true
+		result, err := m.redactVisited(rv.Elem().Interface(), visited)
 		if err != nil {
 			return nil, err
 		}
-		// Return a pointer to the redacted copy.
 		cpPtr := reflect.New(rv.Type().Elem())
 		cpPtr.Elem().Set(reflect.ValueOf(result))
 		return cpPtr.Interface(), nil
 
 	case reflect.Struct:
-		return m.redactStruct(v)
+		return m.redactStructVisited(v, visited)
 
 	case reflect.Slice:
 		if rv.IsNil() {
@@ -76,9 +85,8 @@ func (m *Masker) redact(v any) (any, error) {
 		out := reflect.MakeSlice(rv.Type(), rv.Len(), rv.Len())
 		for i := range rv.Len() {
 			elem := rv.Index(i).Interface()
-			redacted, err := m.redact(elem)
+			redacted, err := m.redactVisited(elem, visited)
 			if err != nil {
-				// Non-struct elements pass through unchanged.
 				out.Index(i).Set(rv.Index(i))
 				continue
 			}
@@ -90,7 +98,7 @@ func (m *Masker) redact(v any) (any, error) {
 		out := reflect.New(rv.Type()).Elem()
 		for i := range rv.Len() {
 			elem := rv.Index(i).Interface()
-			redacted, err := m.redact(elem)
+			redacted, err := m.redactVisited(elem, visited)
 			if err != nil {
 				out.Index(i).Set(rv.Index(i))
 				continue
@@ -104,28 +112,29 @@ func (m *Masker) redact(v any) (any, error) {
 	}
 }
 
-// redactStruct is the hot path for a single struct value.
-func (m *Masker) redactStruct(v any) (any, error) {
+func (m *Masker) redactStructVisited(v any, visited map[uintptr]bool) (any, error) {
 	t := reflect.TypeOf(v)
 	meta := m.getOrParseMeta(t)
 
 	cpPtr := reflect.New(t)
 	cpPtr.Elem().Set(reflect.ValueOf(v))
 
-	// Pass 1: apply mask-tag transforms to tagged string fields.
+	// Pass 1: apply mask-tag transforms to tagged fields.
 	if len(meta.Fields) > 0 {
 		reflectx.Walk(cpPtr.Interface(), meta.Fields, func(fv reflect.Value, fm reflectx.FieldMeta) {
 			if fv.Kind() == reflect.String {
 				fv.SetString(m.transform(fv.String(), fm.Strategy))
 			}
+			if fv.Kind() == reflect.Pointer && !fv.IsNil() && fv.Elem().Kind() == reflect.String {
+				newVal := m.transform(fv.Elem().String(), fm.Strategy)
+				newPtr := reflect.New(fv.Type().Elem())
+				newPtr.Elem().SetString(newVal)
+				fv.Set(newPtr)
+			}
 		})
 	}
 
-	// Pass 2: recursively redact container fields (slices, arrays,
-	// pointers, nested structs). This handles fields like
-	//   Users []User     — each User element is redacted
-	//   Owner *Person    — the pointed-to Person is redacted
-	//   Address Address  — the nested struct is redacted
+	// Pass 2: recursively redact container fields.
 	rv := cpPtr.Elem()
 	for i := range rv.NumField() {
 		fv := rv.Field(i)
@@ -135,7 +144,7 @@ func (m *Masker) redactStruct(v any) (any, error) {
 		if !needsRecurse(fv) {
 			continue
 		}
-		redacted, err := m.redact(fv.Interface())
+		redacted, err := m.redactVisited(fv.Interface(), visited)
 		if err == nil {
 			fv.Set(reflect.ValueOf(redacted))
 		}
@@ -231,6 +240,12 @@ func (m *Masker) RedactPII() Policy {
 			if fv.Kind() == reflect.String {
 				fv.SetString(m.transform(fv.String(), fm.Strategy))
 			}
+			if fv.Kind() == reflect.Pointer && !fv.IsNil() && fv.Elem().Kind() == reflect.String {
+				newVal := m.transform(fv.Elem().String(), fm.Strategy)
+				newPtr := reflect.New(fv.Type().Elem())
+				newPtr.Elem().SetString(newVal)
+				fv.Set(newPtr)
+			}
 		})
 		return reflect.ValueOf(cpPtr).Elem().Interface(), nil
 	}
@@ -250,11 +265,17 @@ func (m *Masker) HashEmails() Policy {
 		}
 		cpPtr := shallowCopy(v)
 		reflectx.Walk(cpPtr, meta.Fields, func(fv reflect.Value, fm reflectx.FieldMeta) {
-			if fv.Kind() != reflect.String {
+			if fm.Strategy != HashStrategy {
 				return
 			}
-			if fm.Strategy == HashStrategy {
+			if fv.Kind() == reflect.String {
 				fv.SetString(Hash(fv.String()))
+			}
+			if fv.Kind() == reflect.Pointer && !fv.IsNil() && fv.Elem().Kind() == reflect.String {
+				newVal := Hash(fv.Elem().String())
+				newPtr := reflect.New(fv.Type().Elem())
+				newPtr.Elem().SetString(newVal)
+				fv.Set(newPtr)
 			}
 		})
 		return reflect.ValueOf(cpPtr).Elem().Interface(), nil
@@ -281,6 +302,9 @@ func (m *Masker) transform(s string, st Strategy) string {
 		}
 		return Hash(s)
 	case TokenizeStrategy:
+		if m.cfg.tokenizeMAC != nil {
+			return TokenizeWithMAC(s, m.cfg.tokenizeMAC)
+		}
 		return Tokenize(s, m.cfg.TokenizeKey)
 	case PartialStrategy:
 		return Partial(s)

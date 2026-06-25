@@ -1,5 +1,11 @@
 package datamask
 
+import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"hash"
+)
+
 // Config holds the configuration for a Masker.
 // The zero value is usable: secret detection is off, and Tokenize/Hash
 // produce deterministic but not cryptographically isolated output.
@@ -16,6 +22,18 @@ type Config struct {
 
 	// HashKey is reserved for future use (salted hashing).
 	HashKey string
+
+	// tokenizeMAC is a pre-computed HMAC for the Tokenize strategy.
+	// Built once at Masker construction to avoid per-call allocations.
+	tokenizeMAC hash.Hash
+}
+
+// initTokenizeMAC pre-computes the HMAC for the Tokenize strategy so
+// callers don't allocate on every Tokenize call.
+func (c *Config) initTokenizeMAC() {
+	if c.TokenizeKey != "" {
+		c.tokenizeMAC = hmac.New(sha256.New, []byte(c.TokenizeKey))
+	}
 }
 
 // Option is a functional option for configuring a Masker.

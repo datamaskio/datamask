@@ -4,7 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
+	"hash"
 	"strings"
 	"unicode/utf8"
 )
@@ -33,17 +33,28 @@ func RedactSecret(s string) string {
 // The hash is deterministic within a process lifetime.
 func Hash(s string) string {
 	h := sha256.Sum256([]byte(s))
-	return fmt.Sprintf("sha256:%s", hex.EncodeToString(h[:]))
+	return "sha256:" + hex.EncodeToString(h[:])
 }
 
 // Tokenize returns a stable HMAC-SHA256 pseudonym for s using key.
 // Same (s, key) always produces the same output — useful for correlation
 // across systems without exposing the original value.
 // The output format is "tok:<hex>" to distinguish it from a raw hash.
+//
+// Prefer TokenizeWithMAC when calling repeatedly with the same key — it
+// avoids allocating a new HMAC on every call.
 func Tokenize(s string, key string) string {
 	mac := hmac.New(sha256.New, []byte(key))
 	mac.Write([]byte(s))
-	return fmt.Sprintf("tok:%s", hex.EncodeToString(mac.Sum(nil)))
+	return "tok:" + hex.EncodeToString(mac.Sum(nil))
+}
+
+// TokenizeWithMAC is like Tokenize but reuses a pre-computed HMAC
+// instance. The mac is reset before use.
+func TokenizeWithMAC(s string, mac hash.Hash) string {
+	mac.Reset()
+	mac.Write([]byte(s))
+	return "tok:" + hex.EncodeToString(mac.Sum(nil))
 }
 
 // Partial masks s according to its apparent type. The format follows
@@ -84,7 +95,7 @@ func partialEmail(s string) string {
 	local := s[:at]
 	domain := s[at:]
 	first, _ := utf8.DecodeRuneInString(local)
-	return fmt.Sprintf("%c***%s", first, domain)
+	return string(first) + "***" + domain
 }
 
 // looksLikeStructured reports whether s contains mostly digits with
@@ -141,11 +152,22 @@ func partialStructured(s string) string {
 // partialGeneric masks a generic string: first 3 chars + *** + last 3 chars.
 // If shorter than 6 runes, returns "***".
 func partialGeneric(s string) string {
+	// Fast path for ASCII — avoid []rune allocation.
+	if len(s) >= 6 && isASCII(s) {
+		return s[:3] + "***" + s[len(s)-3:]
+	}
 	runes := []rune(s)
 	if len(runes) < 6 {
 		return "***"
 	}
-	first := string(runes[:3])
-	last := string(runes[len(runes)-3:])
-	return first + "***" + last
+	return string(runes[:3]) + "***" + string(runes[len(runes)-3:])
+}
+
+func isASCII(s string) bool {
+	for i := range len(s) {
+		if s[i] >= 0x80 {
+			return false
+		}
+	}
+	return true
 }
