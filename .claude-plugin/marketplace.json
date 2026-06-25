@@ -1,0 +1,14 @@
+{
+  "name": "DataMask",
+  "description": "Privacy-by-default data protection for Go applications. Skills and plugins for integrating DataMask into Go services.",
+  "version": "0.1.0",
+  "author": "datamaskio",
+  "repository": "https://github.com/datamaskio/datamask",
+  "skills": [
+    {
+      "name": "datamask",
+      "description": "Integrate DataMask into Go apps — struct tags, slog/OTel wrapping, secret detection",
+      "path": "skills/datamask/SKILL.md"
+    }
+  ]
+}
