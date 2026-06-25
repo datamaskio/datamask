@@ -161,6 +161,13 @@ func needsRecurse(v reflect.Value) bool {
 	return false
 }
 
+// RedactAny is the type-erased version of Redact. It accepts any value
+// and returns any. Prefer the generic Redact[T] when the concrete type
+// is known at compile time.
+func (m *Masker) RedactAny(v any) (any, error) {
+	return m.redact(v)
+}
+
 // RedactInPlace mutates the struct pointed to by v in-place. Every
 // mask-tagged field is replaced with its redaction placeholder.
 //
