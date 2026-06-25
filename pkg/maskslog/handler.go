@@ -64,7 +64,12 @@ func (h *Handler) Enabled(ctx context.Context, level slog.Level) bool {
 // Handle redacts sensitive attributes in r and passes the cleaned record
 // to the underlying handler. The original record is not mutated.
 func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
-	clean := slog.NewRecord(r.Time, r.Level, r.Message, r.PC)
+	msg := r.Message
+	if findings := secret.Detect(msg); len(findings) > 0 {
+		msg = "[" + findings[0].Type + "]"
+	}
+
+	clean := slog.NewRecord(r.Time, r.Level, msg, r.PC)
 	r.Attrs(func(a slog.Attr) bool {
 		clean.AddAttrs(h.redactAttr(a))
 		return true
@@ -118,16 +123,24 @@ func (h *Handler) redactAttr(a slog.Attr) slog.Attr {
 			)
 		}
 		if len(findings) > 0 {
-			// Replace the entire value — security-first.
 			return slog.String(a.Key, "[SECRETS_DETECTED]")
 		}
 
-		// Apply mask-tag redaction if enabled.
 		if h.redactStruct {
 			if redacted, err := h.masker.RedactAny(v); err == nil {
 				return slog.Any(a.Key, redacted)
 			}
 		}
+
+	case slog.KindGroup:
+		// Recursively process each child attribute.
+		attrs := a.Value.Group()
+		kvs := make([]any, 0, len(attrs)*2)
+		for _, child := range attrs {
+			clean := h.redactAttr(child)
+			kvs = append(kvs, clean.Key, clean.Value.Any())
+		}
+		return slog.Group(a.Key, kvs...)
 	}
 
 	return a

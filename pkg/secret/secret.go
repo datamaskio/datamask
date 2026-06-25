@@ -4,6 +4,7 @@ package secret
 
 import (
 	"reflect"
+	"strings"
 
 	"github.com/datamaskio/datamask/internal/patterns"
 )
@@ -55,6 +56,19 @@ func detectString(s string, fieldName string) []Finding {
 	if s == "" {
 		return nil
 	}
+	// Fast pre-filter: all 8 patterns require ≥13 characters (PAN).
+	// Most log values (names, statuses, IDs, short tokens) are much
+	// shorter — skip them without running any regex.
+	if len(s) < 13 {
+		return nil
+	}
+	// Substring check: if the string doesn't contain any known secret
+	// prefix (or a credit-card-like digit sequence), skip regexes.
+	// This is O(len(s)) per string but ~100x cheaper than 8 FindIndex calls.
+	if !mayContainSecret(s) {
+		return nil
+	}
+
 	var findings []Finding
 	for _, p := range patterns.All {
 		locs := p.FindIndex(s)
@@ -69,6 +83,44 @@ func detectString(s string, fieldName string) []Finding {
 		}
 	}
 	return findings
+}
+
+// mayContainSecret reports whether s contains a substring that looks
+// like the start of a known secret format. This is intentionally cheap
+// — false positives are fine (we fall through to regex), but false
+// negatives would skip regex and miss a real secret.
+func mayContainSecret(s string) bool {
+	if strings.Contains(s, "ghp_") ||
+		strings.Contains(s, "github_pat_") ||
+		strings.Contains(s, "sk-") ||
+		strings.Contains(s, "sk_live_") ||
+		strings.Contains(s, "sk_test_") ||
+		strings.Contains(s, "AKIA") ||
+		strings.Contains(s, "ASIA") ||
+		strings.Contains(s, "eyJ") {
+		return true
+	}
+	// PAN heuristic: 13+ consecutive digits (possibly with separators).
+	return likelyPAN(s)
+}
+
+// likelyPAN reports whether s might contain a credit card number.
+func likelyPAN(s string) bool {
+	digits := 0
+	for i := range len(s) {
+		switch s[i] {
+		case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+			digits++
+			if digits >= 13 {
+				return true
+			}
+		case '-', ' ':
+			// separator — allowed, doesn't reset digit count
+		default:
+			digits = 0
+		}
+	}
+	return false
 }
 
 // truncate returns the first 4 characters of s followed by "...".

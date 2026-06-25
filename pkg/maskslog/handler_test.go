@@ -243,6 +243,69 @@ func TestHandlerSecretInStructField(t *testing.T) {
 	}
 }
 
+func TestHandlerRedactsSecretInGroup(t *testing.T) {
+	var buf bytes.Buffer
+	base := slog.NewJSONHandler(&buf, nil)
+	h := NewHandler(base)
+	logger := slog.New(h)
+
+	logger.Info("request",
+		slog.Group("auth",
+			slog.String("token", "ghp_"+strings.Repeat("a", 36)),
+			slog.String("user", "alice"),
+		),
+	)
+
+	output := buf.String()
+	if strings.Contains(output, "ghp_") {
+		t.Error("secret in group should be redacted")
+	}
+	if !strings.Contains(output, "[GitHubPAT]") {
+		t.Errorf("expected [GitHubPAT] in group attr, got: %s", output)
+	}
+}
+
+func TestHandlerNestedGroups(t *testing.T) {
+	var buf bytes.Buffer
+	base := slog.NewJSONHandler(&buf, nil)
+	h := NewHandler(base)
+	logger := slog.New(h)
+
+	logger.Info("deep",
+		slog.Group("outer",
+			slog.Group("inner",
+				slog.String("api_key", "sk-"+strings.Repeat("b", 48)),
+			),
+		),
+	)
+
+	output := buf.String()
+	if strings.Contains(output, "sk-") {
+		t.Error("secret in nested group should be redacted")
+	}
+	if !strings.Contains(output, "[OpenAIKey]") {
+		t.Errorf("expected [OpenAIKey] in nested group, got: %s", output)
+	}
+}
+
+func TestHandlerSecretInMessage(t *testing.T) {
+	// Task 3 bonus: scan log messages too.
+	var buf bytes.Buffer
+	base := slog.NewJSONHandler(&buf, nil)
+	h := NewHandler(base)
+	logger := slog.New(h)
+
+	logger.Info("token: ghp_" + strings.Repeat("a", 36))
+
+	output := buf.String()
+	if strings.Contains(output, "ghp_") {
+		t.Error("secret in message should be redacted")
+	}
+	if !strings.Contains(output, "[GitHubPAT]") {
+		t.Errorf("expected [GitHubPAT] in message, got: %s", output)
+	}
+}
+
 func TestHandlerWithSharedMasker(t *testing.T) {
 	// Sharing a Masker between the slog handler and direct Redact calls
 	// should use the same cache.
