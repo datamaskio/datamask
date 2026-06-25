@@ -90,17 +90,14 @@ func detectString(s string, fieldName string) []Finding {
 // — false positives are fine (we fall through to regex), but false
 // negatives would skip regex and miss a real secret.
 func mayContainSecret(s string) bool {
-	if strings.Contains(s, "ghp_") ||
-		strings.Contains(s, "github_pat_") ||
-		strings.Contains(s, "sk-") ||
-		strings.Contains(s, "sk_live_") ||
-		strings.Contains(s, "sk_test_") ||
-		strings.Contains(s, "AKIA") ||
-		strings.Contains(s, "ASIA") ||
-		strings.Contains(s, "eyJ") {
-		return true
+	// Check for known secret prefixes — derived from the pattern library.
+	// False positives are harmless: regex rejects them downstream.
+	for _, prefix := range patterns.Prefixes() {
+		if strings.Contains(s, prefix) {
+			return true
+		}
 	}
-	// PAN heuristic: 13+ consecutive digits (possibly with separators).
+	// PAN has no fixed prefix — check for 13+ consecutive digits.
 	return likelyPAN(s)
 }
 
@@ -108,16 +105,13 @@ func mayContainSecret(s string) bool {
 func likelyPAN(s string) bool {
 	digits := 0
 	for i := range len(s) {
-		switch s[i] {
-		case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+		if s[i] >= '0' && s[i] <= '9' {
 			digits++
 			if digits >= 13 {
 				return true
 			}
-		case '-', ' ':
-			// separator — allowed, doesn't reset digit count
-		default:
-			digits = 0
+		} else if s[i] != '-' && s[i] != ' ' {
+			digits = 0 // non-separator, non-digit → reset
 		}
 	}
 	return false
