@@ -308,6 +308,36 @@ func TestTruncate(t *testing.T) {
 	}
 }
 
+func TestDetectPANWithSeparators(t *testing.T) {
+	// Card with spaces: 16 digits, should match.
+	card := "4111 1111 1111 1111"
+	f := Detect(card)
+	if len(f) != 1 || f[0].Type != "PAN" {
+		t.Fatalf("expected 1 PAN finding, got %d: %v", len(f), f)
+	}
+}
+
+func TestDetectPANDigitsReset(t *testing.T) {
+	// 12 digits, then a letter (resets), then more digits.
+	// Should NOT match because no 13-consecutive-digit run.
+	s := "123456789012a1234567890123"
+	f := Detect(s)
+	for _, ff := range f {
+		if ff.Type == "PAN" {
+			t.Error("PAN should not match when digits are interrupted by letter")
+		}
+	}
+}
+
+func TestDetectNoPanInShortDigitRun(t *testing.T) {
+	// Only 12 consecutive digits — below the minimum.
+	s := "123456789012"
+	f := Detect(s)
+	if len(f) != 0 {
+		t.Errorf("expected 0 findings for 12-digit string, got %d", len(f))
+	}
+}
+
 func FuzzDetect(f *testing.F) {
 	f.Add("hello")
 	f.Add("")

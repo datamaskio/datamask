@@ -370,6 +370,20 @@ func TestComposedPolicy(t *testing.T) {
 	}
 }
 
+func TestRedactAny(t *testing.T) {
+	m := New()
+	user := customer{Email: "a@b.com", SSN: "123-45-6789"}
+
+	result, err := m.RedactAny(user)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	masked := result.(customer)
+	if masked.Email != "[REDACTED]" {
+		t.Errorf("Email = %q, want [REDACTED]", masked.Email)
+	}
+}
+
 // -- Tests: type cache --
 
 func TestMaskerReusesCache(t *testing.T) {

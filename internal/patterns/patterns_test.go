@@ -256,6 +256,33 @@ func TestAllSlice(t *testing.T) {
 	}
 }
 
+func TestPrefixes(t *testing.T) {
+	p := Prefixes()
+	if len(p) == 0 {
+		t.Error("Prefixes() must not be empty")
+	}
+	seen := make(map[string]bool)
+	for _, prefix := range p {
+		if prefix == "" {
+			t.Error("prefix must not be empty")
+		}
+		if seen[prefix] {
+			t.Errorf("duplicate prefix: %s", prefix)
+		}
+		seen[prefix] = true
+	}
+	// Verify key prefixes are present.
+	if !seen["sk-"] {
+		t.Error("expected sk- prefix")
+	}
+	if !seen["ghp_"] {
+		t.Error("expected ghp_ prefix")
+	}
+	if !seen["eyJ"] {
+		t.Error("expected eyJ prefix")
+	}
+}
+
 func FuzzPatterns(f *testing.F) {
 	f.Add("hello world")
 	f.Add("AKIAIOSFODNN7EXAMPLE")
