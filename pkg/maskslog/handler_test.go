@@ -215,6 +215,34 @@ func TestHandlerWithRedactStructs(t *testing.T) {
 	}
 }
 
+func TestHandlerSecretInStructField(t *testing.T) {
+	// A struct with a secret-containing string field (no mask tag).
+	// The handler should detect the secret and replace the entire value.
+	var buf bytes.Buffer
+	base := slog.NewJSONHandler(&buf, nil)
+	h := NewHandler(base)
+	logger := slog.New(h)
+
+	type Config struct {
+		Endpoint string
+		Token    string // no mask tag, but contains a GitHub PAT
+	}
+	cfg := Config{
+		Endpoint: "/api/v1",
+		Token:    "ghp_" + strings.Repeat("a", 36),
+	}
+
+	logger.Info("config", slog.Any("cfg", cfg))
+
+	output := buf.String()
+	if strings.Contains(output, "ghp_") {
+		t.Error("secret in struct field should be redacted")
+	}
+	if !strings.Contains(output, "[SECRETS_DETECTED]") {
+		t.Errorf("expected [SECRETS_DETECTED], got: %s", output)
+	}
+}
+
 func TestHandlerWithSharedMasker(t *testing.T) {
 	// Sharing a Masker between the slog handler and direct Redact calls
 	// should use the same cache.

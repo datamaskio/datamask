@@ -20,6 +20,7 @@ type Handler struct {
 	base         slog.Handler
 	masker       *datamask.Masker
 	redactStruct bool
+	logger       *slog.Logger
 }
 
 // Option configures a Handler.
@@ -47,6 +48,7 @@ func NewHandler(base slog.Handler, opts ...Option) *Handler {
 	h := &Handler{
 		base:   base,
 		masker: datamask.New(),
+		logger: slog.Default(),
 	}
 	for _, o := range opts {
 		o(h)
@@ -80,6 +82,7 @@ func (h *Handler) WithAttrs(attrs []slog.Attr) slog.Handler {
 		base:         h.base.WithAttrs(cleaned),
 		masker:       h.masker,
 		redactStruct: h.redactStruct,
+		logger:       h.logger,
 	}
 }
 
@@ -89,6 +92,7 @@ func (h *Handler) WithGroup(name string) slog.Handler {
 		base:         h.base.WithGroup(name),
 		masker:       h.masker,
 		redactStruct: h.redactStruct,
+		logger:       h.logger,
 	}
 }
 
@@ -99,13 +103,27 @@ func (h *Handler) redactAttr(a slog.Attr) slog.Attr {
 		s := a.Value.String()
 		findings := secret.Detect(s)
 		if len(findings) > 0 {
-			// Replace with the type name of the first secret found.
 			return slog.String(a.Key, "["+findings[0].Type+"]")
 		}
 
 	case slog.KindAny:
+		v := a.Value.Any()
+
+		// Scan struct/pointer values for secrets in their fields.
+		findings := secret.DetectAll(v)
+		for _, f := range findings {
+			h.logger.Warn("datamask: secret detected in struct field",
+				"field", f.Field,
+				"secret_type", f.Type,
+			)
+		}
+		if len(findings) > 0 {
+			// Replace the entire value — security-first.
+			return slog.String(a.Key, "[SECRETS_DETECTED]")
+		}
+
+		// Apply mask-tag redaction if enabled.
 		if h.redactStruct {
-			v := a.Value.Any()
 			if redacted, err := h.masker.RedactAny(v); err == nil {
 				return slog.Any(a.Key, redacted)
 			}
