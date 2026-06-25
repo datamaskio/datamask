@@ -122,9 +122,13 @@ func TestRedactNoMaskableFields(t *testing.T) {
 	m := New()
 	u := untagged{Name: "John", Email: "john@example.com"}
 
-	_, err := Redact(m, u)
-	if !errors.Is(err, ErrNoMaskableFields) {
-		t.Errorf("expected ErrNoMaskableFields, got %v", err)
+	masked, err := Redact(m, u)
+	if err != nil {
+		t.Errorf("unexpected error for untagged struct: %v", err)
+	}
+	// Value should be returned unchanged, no error.
+	if masked.Name != "John" {
+		t.Errorf("Name = %q, want John (unchanged)", masked.Name)
 	}
 }
 
@@ -395,8 +399,12 @@ func TestRedactInPlaceUntagged(t *testing.T) {
 	m := New()
 	u := &untagged{Name: "John"}
 	err := m.RedactInPlace(u)
-	if !errors.Is(err, ErrNoMaskableFields) {
-		t.Errorf("expected ErrNoMaskableFields, got %v", err)
+	if err != nil {
+		t.Errorf("unexpected error for untagged struct: %v", err)
+	}
+	// Value should be unchanged, no error.
+	if u.Name != "John" {
+		t.Errorf("Name = %q, want John", u.Name)
 	}
 }
 
@@ -448,6 +456,247 @@ func TestRedactWithHashKey(t *testing.T) {
 	// With HashKey set, transform routes to Tokenize (tok: prefix).
 	if len(masked.ID) < 4 || masked.ID[:4] != "tok:" {
 		t.Errorf("ID = %q, expected tok: prefix (HashKey routes to Tokenize)", masked.ID)
+	}
+}
+
+func TestRedactSliceOfStructs(t *testing.T) {
+	m := New()
+	users := []customer{
+		{Name: "Alice", Email: "alice@example.com", SSN: "111-11-1111"},
+		{Name: "Bob", Email: "bob@example.com", SSN: "222-22-2222"},
+	}
+
+	masked, err := Redact(m, users)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(masked) != 2 {
+		t.Fatalf("expected 2 elements, got %d", len(masked))
+	}
+	if masked[0].Email != "[REDACTED]" {
+		t.Errorf("Email[0] = %q, want [REDACTED]", masked[0].Email)
+	}
+	if masked[1].Email != "[REDACTED]" {
+		t.Errorf("Email[1] = %q, want [REDACTED]", masked[1].Email)
+	}
+	if users[0].Email != "alice@example.com" {
+		t.Error("original slice was mutated")
+	}
+}
+
+func TestRedactSliceOfPointers(t *testing.T) {
+	m := New()
+	users := []*customer{
+		{Name: "Alice", Email: "alice@example.com", SSN: "111-11-1111"},
+		{Name: "Bob", Email: "bob@example.com", SSN: "222-22-2222"},
+	}
+
+	masked, err := Redact(m, users)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(masked) != 2 {
+		t.Fatalf("expected 2 elements, got %d", len(masked))
+	}
+	if masked[0].Email != "[REDACTED]" {
+		t.Errorf("Email[0] = %q, want [REDACTED]", masked[0].Email)
+	}
+	if masked[1].Email != "[REDACTED]" {
+		t.Errorf("Email[1] = %q, want [REDACTED]", masked[1].Email)
+	}
+}
+
+func TestRedactPointerToStruct(t *testing.T) {
+	m := New()
+	user := &customer{
+		Name:  "Alice",
+		Email: "alice@example.com",
+		SSN:   "111-11-1111",
+	}
+
+	masked, err := Redact(m, user)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if masked.Email != "[REDACTED]" {
+		t.Errorf("Email = %q, want [REDACTED]", masked.Email)
+	}
+	if user.Email != "alice@example.com" {
+		t.Error("original pointer was mutated")
+	}
+}
+
+func TestRedactArrayOfStructs(t *testing.T) {
+	m := New()
+	users := [2]customer{
+		{Name: "Alice", Email: "alice@example.com", SSN: "111-11-1111"},
+		{Name: "Bob", Email: "bob@example.com", SSN: "222-22-2222"},
+	}
+
+	masked, err := Redact(m, users)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if masked[0].Email != "[REDACTED]" {
+		t.Errorf("Email[0] = %q, want [REDACTED]", masked[0].Email)
+	}
+	if masked[1].Email != "[REDACTED]" {
+		t.Errorf("Email[1] = %q, want [REDACTED]", masked[1].Email)
+	}
+}
+
+func TestRedactNilSlice(t *testing.T) {
+	m := New()
+	var users []customer
+
+	masked, err := Redact(m, users)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if masked != nil {
+		t.Error("nil slice should remain nil")
+	}
+}
+
+func TestRedactContextWithUsersSlice(t *testing.T) {
+	// Context{Users: []User} — the exact use case.
+	type User struct {
+		Name  string
+		Email string `mask:"email"`
+		SSN   string `mask:"secret"`
+	}
+	type Context struct {
+		Users []User
+	}
+
+	m := New()
+	ctx := Context{
+		Users: []User{
+			{Name: "Alice", Email: "alice@example.com", SSN: "111-11-1111"},
+			{Name: "Bob", Email: "bob@example.com", SSN: "222-22-2222"},
+		},
+	}
+
+	masked, err := Redact(m, ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(masked.Users) != 2 {
+		t.Fatalf("expected 2 users, got %d", len(masked.Users))
+	}
+	if masked.Users[0].Name != "Alice" {
+		t.Errorf("Name = %q, want Alice", masked.Users[0].Name)
+	}
+	if masked.Users[0].Email != "[REDACTED]" {
+		t.Errorf("Email = %q, want [REDACTED]", masked.Users[0].Email)
+	}
+	if masked.Users[0].SSN != "[REDACTED]" {
+		t.Errorf("SSN = %q, want [REDACTED]", masked.Users[0].SSN)
+	}
+	if masked.Users[1].Email != "[REDACTED]" {
+		t.Errorf("Email[1] = %q, want [REDACTED]", masked.Users[1].Email)
+	}
+	// Original must not be mutated.
+	if ctx.Users[0].Email != "alice@example.com" {
+		t.Error("original Users slice was mutated")
+	}
+}
+
+func TestRedactNestedPointerField(t *testing.T) {
+	type Profile struct {
+		Phone string `mask:"phone"`
+	}
+	type User struct {
+		Name    string
+		Profile *Profile
+	}
+
+	m := New()
+	user := User{
+		Name:    "Alice",
+		Profile: &Profile{Phone: "+1-555-1234"},
+	}
+
+	masked, err := Redact(m, user)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if masked.Profile.Phone != "[REDACTED]" {
+		t.Errorf("Profile.Phone = %q, want [REDACTED]", masked.Profile.Phone)
+	}
+	if user.Profile.Phone != "+1-555-1234" {
+		t.Error("original pointer was mutated")
+	}
+}
+
+func TestRedactNestedStructField(t *testing.T) {
+	type Address struct {
+		Zip string `mask:"secret"`
+	}
+	type User struct {
+		Name    string
+		Address Address
+	}
+
+	m := New()
+	user := User{
+		Name:    "Alice",
+		Address: Address{Zip: "90210"},
+	}
+
+	masked, err := Redact(m, user)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if masked.Address.Zip != "[REDACTED]" {
+		t.Errorf("Address.Zip = %q, want [REDACTED]", masked.Address.Zip)
+	}
+}
+
+func TestRedactNonStructError(t *testing.T) {
+	m := New()
+	_, err := Redact(m, 42)
+	if err == nil {
+		t.Error("expected error for int")
+	}
+	_, err = Redact(m, "hello")
+	if err == nil {
+		t.Error("expected error for string")
+	}
+	_, err = Redact(m, map[string]int{"a": 1})
+	if err == nil {
+		t.Error("expected error for map")
+	}
+}
+
+func TestCacheSharedAcrossRecursiveCalls(t *testing.T) {
+	// Verify that the cache is shared across recursive redactions
+	// (slice elements, nested structs, pointer fields).
+	type Inner struct {
+		Val string `mask:"secret"`
+	}
+	type Outer struct {
+		Items []Inner
+	}
+
+	m := New()
+	v := Outer{Items: []Inner{{Val: "a"}, {Val: "b"}, {Val: "c"}}}
+
+	_, _ = Redact(m, v)
+
+	// Inner should be cached exactly once (all 3 elements share the cache).
+	if _, ok := m.cache.Load(reflect.TypeFor[Inner]()); !ok {
+		t.Error("Inner type not cached after recursive redaction")
+	}
+	if _, ok := m.cache.Load(reflect.TypeFor[Outer]()); !ok {
+		t.Error("Outer type not cached")
 	}
 }
 

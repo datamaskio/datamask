@@ -227,6 +227,36 @@ func TestDetectAllNilPointerField(t *testing.T) {
 	}
 }
 
+func TestDetectAllEmbeddedPointer(t *testing.T) {
+	type outer struct {
+		Name string
+		*ApiConfig
+	}
+	cfg := &outer{
+		Name:      "test",
+		ApiConfig: &ApiConfig{Token: "ghp_" + strings.Repeat("a", 36)},
+	}
+	findings := DetectAll(cfg)
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding for embedded pointer, got %d", len(findings))
+	}
+}
+
+func TestDetectAllNilEmbeddedPointer(t *testing.T) {
+	type outer struct {
+		Name string
+		*ApiConfig
+	}
+	cfg := &outer{
+		Name:      "test",
+		ApiConfig: nil,
+	}
+	findings := DetectAll(cfg)
+	if len(findings) != 0 {
+		t.Errorf("expected 0 findings for nil embedded pointer, got %d", len(findings))
+	}
+}
+
 func TestDetectAllNonStruct(t *testing.T) {
 	findings := DetectAll(42)
 	if len(findings) != 0 {
@@ -236,6 +266,17 @@ func TestDetectAllNonStruct(t *testing.T) {
 	findings = DetectAll("hello")
 	if len(findings) != 0 {
 		t.Errorf("expected 0 findings for string, got %d", len(findings))
+	}
+}
+
+func TestDetectAllPointerToStruct(t *testing.T) {
+	token := "ghp_" + strings.Repeat("a", 36)
+	cfg := &ApiConfig{
+		Token: token,
+	}
+	findings := DetectAll(cfg)
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding for pointer-to-struct, got %d", len(findings))
 	}
 }
 

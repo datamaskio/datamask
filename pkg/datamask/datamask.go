@@ -1,15 +1,11 @@
 package datamask
 
 import (
-	"errors"
 	"fmt"
 	"reflect"
 
 	"github.com/datamaskio/datamask/internal/reflectx"
 )
-
-// ErrNoMaskableFields is returned when a struct has no mask-tagged fields.
-var ErrNoMaskableFields = errors.New("datamask: no mask-tagged fields")
 
 // Masker is the core redaction engine. Create one with New and reuse it
 // across goroutines. A zero-value Masker is not usable; always use New.
@@ -41,8 +37,7 @@ func New(opts ...Option) *Masker {
 //
 //	masked, err := datamask.Redact(masker, user)  // masked is User
 //
-// If v's type has no mask-tagged fields, the copy is returned unchanged
-// along with ErrNoMaskableFields.
+// If v's type has no mask-tagged fields, the copy is returned unchanged.
 func Redact[T any](m *Masker, v T) (T, error) {
 	result, err := m.redact(v)
 	if err != nil {
@@ -52,31 +47,118 @@ func Redact[T any](m *Masker, v T) (T, error) {
 	return result.(T), nil
 }
 
-// redact is the type-erased implementation. See Redact for the public API.
+// redact is the type-erased implementation. It handles structs, slices,
+// arrays, and pointers to structs. Maps and other types return an error.
 func (m *Masker) redact(v any) (any, error) {
+	rv := reflect.ValueOf(v)
+
+	switch rv.Kind() {
+	case reflect.Pointer:
+		if rv.IsNil() {
+			return v, nil
+		}
+		result, err := m.redact(rv.Elem().Interface())
+		if err != nil {
+			return nil, err
+		}
+		// Return a pointer to the redacted copy.
+		cpPtr := reflect.New(rv.Type().Elem())
+		cpPtr.Elem().Set(reflect.ValueOf(result))
+		return cpPtr.Interface(), nil
+
+	case reflect.Struct:
+		return m.redactStruct(v)
+
+	case reflect.Slice:
+		if rv.IsNil() {
+			return v, nil
+		}
+		out := reflect.MakeSlice(rv.Type(), rv.Len(), rv.Len())
+		for i := range rv.Len() {
+			elem := rv.Index(i).Interface()
+			redacted, err := m.redact(elem)
+			if err != nil {
+				// Non-struct elements pass through unchanged.
+				out.Index(i).Set(rv.Index(i))
+				continue
+			}
+			out.Index(i).Set(reflect.ValueOf(redacted))
+		}
+		return out.Interface(), nil
+
+	case reflect.Array:
+		out := reflect.New(rv.Type()).Elem()
+		for i := range rv.Len() {
+			elem := rv.Index(i).Interface()
+			redacted, err := m.redact(elem)
+			if err != nil {
+				out.Index(i).Set(rv.Index(i))
+				continue
+			}
+			out.Index(i).Set(reflect.ValueOf(redacted))
+		}
+		return out.Interface(), nil
+
+	default:
+		return nil, fmt.Errorf("datamask: Redact requires a struct, slice, or array, got %v", rv.Kind())
+	}
+}
+
+// redactStruct is the hot path for a single struct value.
+func (m *Masker) redactStruct(v any) (any, error) {
 	t := reflect.TypeOf(v)
-	if t.Kind() != reflect.Struct {
-		return nil, fmt.Errorf("datamask: Redact requires a struct, got %v", t.Kind())
-	}
-
 	meta := m.getOrParseMeta(t)
-	if len(meta.Fields) == 0 {
-		return v, ErrNoMaskableFields
-	}
 
-	// Allocate a pointer to a new struct, copy v into it, walk the
-	// copy via its pointer (so fields are settable), then return the
-	// struct value (not the pointer) so the generic Redact wrapper
-	// can cast back to T.
 	cpPtr := reflect.New(t)
 	cpPtr.Elem().Set(reflect.ValueOf(v))
-	reflectx.Walk(cpPtr.Interface(), meta.Fields, func(fv reflect.Value, fm reflectx.FieldMeta) {
-		if fv.Kind() == reflect.String {
-			fv.SetString(m.transform(fv.String(), fm.Strategy))
-		}
-	})
 
+	// Pass 1: apply mask-tag transforms to tagged string fields.
+	if len(meta.Fields) > 0 {
+		reflectx.Walk(cpPtr.Interface(), meta.Fields, func(fv reflect.Value, fm reflectx.FieldMeta) {
+			if fv.Kind() == reflect.String {
+				fv.SetString(m.transform(fv.String(), fm.Strategy))
+			}
+		})
+	}
+
+	// Pass 2: recursively redact container fields (slices, arrays,
+	// pointers, nested structs). This handles fields like
+	//   Users []User     — each User element is redacted
+	//   Owner *Person    — the pointed-to Person is redacted
+	//   Address Address  — the nested struct is redacted
+	rv := cpPtr.Elem()
+	for i := range rv.NumField() {
+		fv := rv.Field(i)
+		if !fv.CanSet() {
+			continue
+		}
+		if !needsRecurse(fv) {
+			continue
+		}
+		redacted, err := m.redact(fv.Interface())
+		if err == nil {
+			fv.Set(reflect.ValueOf(redacted))
+		}
+	}
+
+	if len(meta.Fields) == 0 {
+		return cpPtr.Elem().Interface(), nil
+	}
 	return cpPtr.Elem().Interface(), nil
+}
+
+// needsRecurse reports whether the value contains a struct that should
+// be recursively redacted.
+func needsRecurse(v reflect.Value) bool {
+	switch v.Kind() {
+	case reflect.Slice, reflect.Array:
+		return v.Len() > 0
+	case reflect.Pointer:
+		return !v.IsNil() && needsRecurse(v.Elem())
+	case reflect.Struct:
+		return true
+	}
+	return false
 }
 
 // RedactInPlace mutates the struct pointed to by v in-place. Every
@@ -97,7 +179,7 @@ func (m *Masker) RedactInPlace(v any) error {
 
 	meta := m.getOrParseMeta(rv.Type())
 	if len(meta.Fields) == 0 {
-		return ErrNoMaskableFields
+		return nil
 	}
 
 	reflectx.Walk(v, meta.Fields, func(fv reflect.Value, fm reflectx.FieldMeta) {

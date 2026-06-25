@@ -135,6 +135,28 @@ func TestPartialGeneric(t *testing.T) {
 	}
 }
 
+func TestPartialEmailNoAtSign(t *testing.T) {
+	got := Partial("notanemail")
+	if got != "not***ail" {
+		t.Errorf("Partial(%q) = %q, want not***ail (generic masking)", "notanemail", got)
+	}
+}
+
+func TestPartialEmailAtStart(t *testing.T) {
+	got := Partial("@domain.com")
+	if got != "***" {
+		t.Errorf("Partial(%q) = %q, want ***", "@domain.com", got)
+	}
+}
+
+func TestPartialStructuredAllDigits(t *testing.T) {
+	// A pure digit string without separators → treated as generic.
+	got := Partial("1234567890")
+	if got != "123***890" {
+		t.Errorf("Partial(%q) = %q, want 123***890", "1234567890", got)
+	}
+}
+
 func TestPartialShort(t *testing.T) {
 	tests := []string{"ab", "abc", "a", "abcde"}
 	for _, s := range tests {

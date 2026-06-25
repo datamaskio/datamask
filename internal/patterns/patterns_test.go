@@ -195,6 +195,25 @@ func TestJWTMatch(t *testing.T) {
 	}
 }
 
+func TestFindIndex(t *testing.T) {
+	text := "prefix AKIAIOSFODNN7EXAMPLE suffix"
+	idx := AWSKey.FindIndex(text)
+	if len(idx) != 1 {
+		t.Fatalf("expected 1 match, got %d", len(idx))
+	}
+	if idx[0][0] != 7 || idx[0][1] != 27 {
+		t.Errorf("FindIndex = %v, want [7, 27]", idx[0])
+	}
+}
+
+func TestFindIndexMultiple(t *testing.T) {
+	text := "AKIAIOSFODNN7EXAMPLE and AKIA1234567890ABCDEF"
+	idx := AWSKey.FindIndex(text)
+	if len(idx) != 2 {
+		t.Fatalf("expected 2 matches, got %d", len(idx))
+	}
+}
+
 func TestFindReturnsAllMatches(t *testing.T) {
 	// Text with multiple secrets embedded.
 	text := "key1: AKIAIOSFODNN7EXAMPLE and key2: ghp_1234567890abcdefghijklmnopqrstuvwxyz"
