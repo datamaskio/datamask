@@ -13,10 +13,10 @@ type Strategy = reflectx.Strategy
 
 // Strategy constants re-exported from the internal reflection package.
 const (
-	RedactStrategy    = reflectx.RedactStrategy
-	HashStrategy      = reflectx.HashStrategy
-	TokenizeStrategy  = reflectx.TokenizeStrategy
-	PartialStrategy   = reflectx.PartialStrategy
+	RedactStrategy   = reflectx.RedactStrategy
+	HashStrategy     = reflectx.HashStrategy
+	TokenizeStrategy = reflectx.TokenizeStrategy
+	PartialStrategy  = reflectx.PartialStrategy
 )
 
 // MaskTag is the struct tag key used to mark sensitive fields.

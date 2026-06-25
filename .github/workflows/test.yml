@@ -1,0 +1,35 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Test
+        run: go test -race -coverprofile=coverage.out ./...
+
+      - name: Check coverage
+        run: |
+          COV=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | sed 's/%//')
+          echo "Coverage: ${COV}%"
+          if [ "$(echo "$COV < 95" | bc)" -eq 1 ]; then
+            echo "Coverage ${COV}% is below 95% threshold"
+            exit 1
+          fi
+
+      - name: Benchmarks (informational)
+        run: go test -bench=. -benchmem ./...
+
+      - name: Vet
+        run: go vet ./...

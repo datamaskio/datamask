@@ -26,13 +26,13 @@ type optOutStruct struct {
 }
 
 type mixedStrategy struct {
-	Name   string
-	Email  string `mask:"email"`   // → RedactStrategy
-	Token  string `mask:"hash"`    // → HashStrategy
-	Alias  string `mask:"tokenize"` // → TokenizeStrategy
-	Phone  string `mask:"partial"`  // → PartialStrategy
-	SSN    string `mask:"secret"`   // → RedactStrategy
-	Bogus  string `mask:"xyzzy"`    // unknown → RedactStrategy
+	Name  string
+	Email string `mask:"email"`    // → RedactStrategy
+	Token string `mask:"hash"`     // → HashStrategy
+	Alias string `mask:"tokenize"` // → TokenizeStrategy
+	Phone string `mask:"partial"`  // → PartialStrategy
+	SSN   string `mask:"secret"`   // → RedactStrategy
+	Bogus string `mask:"xyzzy"`    // unknown → RedactStrategy
 }
 
 type caseInsensitive struct {

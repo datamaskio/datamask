@@ -87,7 +87,7 @@ func TestOpenAIKeyMatch(t *testing.T) {
 
 	nonMatches := []string{
 		"hello world",
-		"sk-short", // too short
+		"sk-short",                     // too short
 		"sk_live_1234567890abcdefghij", // Stripe key
 	}
 
@@ -141,21 +141,21 @@ func TestStripeTestKeyMatch(t *testing.T) {
 
 func TestPANMatch(t *testing.T) {
 	examples := []string{
-		"4111111111111111",       // Visa 16-digit
-		"5500000000000004",       // Mastercard
-		"340000000000009",        // Amex 15-digit
-		"6011000000000004",       // Discover
-		"4111-1111-1111-1111",    // Visa with dashes
-		"5500 0000 0000 0004",    // Mastercard with spaces
-		"3400-000000-00009",      // Amex with dash
-		"4111 1111 1111 1111",    // Visa with spaces
+		"4111111111111111",    // Visa 16-digit
+		"5500000000000004",    // Mastercard
+		"340000000000009",     // Amex 15-digit
+		"6011000000000004",    // Discover
+		"4111-1111-1111-1111", // Visa with dashes
+		"5500 0000 0000 0004", // Mastercard with spaces
+		"3400-000000-00009",   // Amex with dash
+		"4111 1111 1111 1111", // Visa with spaces
 	}
 
 	nonMatches := []string{
 		"hello world",
-		"1234567890123456",       // random 16 digits (doesn't match IIN)
-		"1234-5678-9012-3456",    // random with dashes
-		"9999999999999999",       // invalid IIN
+		"1234567890123456",    // random 16 digits (doesn't match IIN)
+		"1234-5678-9012-3456", // random with dashes
+		"9999999999999999",    // invalid IIN
 	}
 
 	for _, ex := range examples {

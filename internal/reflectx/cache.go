@@ -12,10 +12,10 @@ import (
 type Strategy int
 
 const (
-	RedactStrategy    Strategy = iota // Replace with placeholder (e.g. "[EMAIL]")
-	HashStrategy                      // Replace with SHA-256 hash
-	TokenizeStrategy                  // Replace with stable pseudonym
-	PartialStrategy                   // Partially mask (e.g. "j***@example.com")
+	RedactStrategy   Strategy = iota // Replace with placeholder (e.g. "[EMAIL]")
+	HashStrategy                     // Replace with SHA-256 hash
+	TokenizeStrategy                 // Replace with stable pseudonym
+	PartialStrategy                  // Partially mask (e.g. "j***@example.com")
 )
 
 // TypeMeta holds precomputed field metadata for a struct type.
