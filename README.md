@@ -39,9 +39,9 @@ logger := slog.New(maskslog.NewHandler(
 
 | Package | Purpose |
 |---|---|
-| `pkg/datamask` | Core API — `Masker`, `Redact`, `Config`, `Policy` |
-| `pkg/secret` | Secret detection — `Detect`, `DetectAll` |
-| `pkg/maskslog` | `slog.Handler` wrapper — automatic log redaction |
+| (root) | Core API — `Masker`, `Redact`, `Config`, `Policy` |
+| `secret/` | Secret detection — `Detect`, `DetectAll` |
+| `maskslog/` | `slog.Handler` wrapper — automatic log redaction |
 
 ## Dependencies
 

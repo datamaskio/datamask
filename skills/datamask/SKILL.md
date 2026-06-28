@@ -62,18 +62,15 @@ DataMask is split across modules to keep the core stdlib-only:
 
 | Package | Import | Module |
 |---|---|---|
-| Core (Masker, Policy, tags) | `github.com/datamaskio/datamask/pkg/datamask` | `datamask` |
-| Secret detection | `github.com/datamaskio/datamask/pkg/secret` | `datamask` |
-| slog handler | `github.com/datamaskio/datamask/pkg/maskslog` | `datamask` |
+| Core (Masker, Policy, tags) | `github.com/datamaskio/datamask` | `datamask` |
+| Secret detection | `github.com/datamaskio/datamask/secret` | `datamask` |
+| slog handler | `github.com/datamaskio/datamask/maskslog` | `datamask` |
 | OTel span processor | `github.com/datamaskio/maskotel` | `maskotel` (separate) |
-
-Note: `maskslog` and `secret` are subdirectories of `pkg/`, not `pkg/datamask/`.
-There is no `pkg/datamask/maskslog` or `pkg/datamask/secret` path.
 
 ## How to use the Masker
 
 ```go
-import "github.com/datamaskio/datamask/pkg/datamask"
+import "github.com/datamaskio/datamask"
 
 masker := datamask.New(
     datamask.WithSecretDetection(true),

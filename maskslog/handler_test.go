@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/datamaskio/datamask/pkg/datamask"
+	"github.com/datamaskio/datamask"
 )
 
 func TestHandlerPassesThroughCleanLogs(t *testing.T) {

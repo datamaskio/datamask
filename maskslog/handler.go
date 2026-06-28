@@ -10,8 +10,8 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/datamaskio/datamask/pkg/datamask"
-	"github.com/datamaskio/datamask/pkg/secret"
+	"github.com/datamaskio/datamask"
+	"github.com/datamaskio/datamask/secret"
 )
 
 // Handler wraps a slog.Handler and redacts sensitive values in log
