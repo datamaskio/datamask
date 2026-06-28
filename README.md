@@ -3,6 +3,7 @@
 Privacy-by-default data protection for Go. The core library.
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/datamaskio/datamask.svg)](https://pkg.go.dev/github.com/datamaskio/datamask)
+[![Go Report Card](https://goreportcard.com/badge/github.com/datamaskio/datamask)](https://goreportcard.com/report/github.com/datamaskio/datamask)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 ## Install
