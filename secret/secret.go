@@ -3,6 +3,7 @@
 package secret
 
 import (
+	"bytes"
 	"reflect"
 	"strings"
 
@@ -28,6 +29,67 @@ type Finding struct {
 // Returns nil if no secrets are detected.
 func Detect(s string) []Finding {
 	return detectString(s, "")
+}
+
+// ScanBytes scans b against all known secret patterns and returns findings.
+// Unlike Detect, it operates on []byte directly — no string conversion.
+// Use this when scanning log output, JSON buffers, or other byte-level data
+// where avoiding allocations matters.
+func ScanBytes(b []byte) []Finding {
+	if len(b) < 13 {
+		return nil
+	}
+	if !mayContainSecretBytes(b) {
+		return nil
+	}
+
+	var findings []Finding
+	for _, p := range patterns.All {
+		locs := p.FindIndexBytes(b)
+		for _, loc := range locs {
+			match := b[loc[0]:loc[1]]
+			findings = append(findings, Finding{
+				Type:     p.Name,
+				Position: loc[0],
+				Value:    truncateBytes(match),
+			})
+		}
+	}
+	return findings
+}
+
+// mayContainSecretBytes is the []byte equivalent of mayContainSecret.
+func mayContainSecretBytes(b []byte) bool {
+	for _, prefix := range patterns.Prefixes() {
+		if bytes.Contains(b, []byte(prefix)) {
+			return true
+		}
+	}
+	return likelyPANBytes(b)
+}
+
+// likelyPANBytes reports whether b might contain a credit card number.
+func likelyPANBytes(b []byte) bool {
+	digits := 0
+	for i := range len(b) {
+		if b[i] >= '0' && b[i] <= '9' {
+			digits++
+			if digits >= 13 {
+				return true
+			}
+		} else if b[i] != '-' && b[i] != ' ' {
+			digits = 0
+		}
+	}
+	return false
+}
+
+// truncateBytes returns the first 4 bytes as a string followed by "...".
+func truncateBytes(b []byte) string {
+	if len(b) <= 4 {
+		return string(b)
+	}
+	return string(b[:4]) + "..."
 }
 
 // DetectAll walks the exported string fields of v and scans each for

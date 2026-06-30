@@ -298,3 +298,30 @@ func FuzzPatterns(f *testing.F) {
 		}
 	})
 }
+
+func TestFindIndexBytes(t *testing.T) {
+	data := []byte("ghp_" + strings.Repeat("a", 36))
+	locs := GitHubPAT.FindIndexBytes(data)
+	if len(locs) != 1 {
+		t.Fatalf("expected 1 match, got %d", len(locs))
+	}
+	if locs[0][0] != 0 || locs[0][1] != len(data) {
+		t.Errorf("match range = [%d,%d], want [0,%d]", locs[0][0], locs[0][1], len(data))
+	}
+
+	// No match.
+	locs = AWSKey.FindIndexBytes(data)
+	if len(locs) != 0 {
+		t.Errorf("expected 0 matches for AWSKey, got %d", len(locs))
+	}
+}
+
+func TestFindIndexBytesNoMatch(t *testing.T) {
+	data := []byte("hello world")
+	for _, p := range All {
+		locs := p.FindIndexBytes(data)
+		if len(locs) != 0 {
+			t.Errorf("%s.FindIndexBytes: expected 0 matches, got %d", p.Name, len(locs))
+		}
+	}
+}

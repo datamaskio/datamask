@@ -372,3 +372,141 @@ func FuzzDetect(f *testing.F) {
 		}
 	})
 }
+
+// -- ScanBytes tests --
+
+func TestScanBytesGitHubPAT(t *testing.T) {
+	data := []byte("ghp_" + strings.Repeat("a", 36))
+	findings := ScanBytes(data)
+
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+	f := findings[0]
+	if f.Type != "GitHubPAT" {
+		t.Errorf("Type = %q, want GitHubPAT", f.Type)
+	}
+	if f.Field != "" {
+		t.Errorf("Field = %q, want empty", f.Field)
+	}
+	if f.Position != 0 {
+		t.Errorf("Position = %d, want 0", f.Position)
+	}
+	if f.Value != "ghp_..." {
+		t.Errorf("Value = %q, want ghp_...", f.Value)
+	}
+}
+
+func TestScanBytesNoSecret(t *testing.T) {
+	data := []byte("hello world")
+	findings := ScanBytes(data)
+	if len(findings) != 0 {
+		t.Errorf("expected 0 findings, got %d", len(findings))
+	}
+}
+
+func TestScanBytesShortInput(t *testing.T) {
+	data := []byte("short")
+	findings := ScanBytes(data)
+	if len(findings) != 0 {
+		t.Errorf("expected 0 findings for short input, got %d", len(findings))
+	}
+}
+
+func TestScanBytesMultiplePatterns(t *testing.T) {
+	data := []byte("ghp_" + strings.Repeat("a", 36) + " sk-" + strings.Repeat("b", 48))
+	findings := ScanBytes(data)
+
+	if len(findings) != 2 {
+		t.Fatalf("expected 2 findings, got %d", len(findings))
+	}
+	if findings[0].Type != "GitHubPAT" {
+		t.Errorf("first Type = %q, want GitHubPAT", findings[0].Type)
+	}
+	if findings[1].Type != "OpenAIKey" {
+		t.Errorf("second Type = %q, want OpenAIKey", findings[1].Type)
+	}
+}
+
+func TestScanBytesEmpty(t *testing.T) {
+	findings := ScanBytes(nil)
+	if len(findings) != 0 {
+		t.Errorf("expected 0 findings for nil, got %d", len(findings))
+	}
+	findings = ScanBytes([]byte{})
+	if len(findings) != 0 {
+		t.Errorf("expected 0 findings for empty, got %d", len(findings))
+	}
+}
+
+func TestScanBytesPAN(t *testing.T) {
+	data := []byte("4111111111111111")
+	findings := ScanBytes(data)
+
+	if len(findings) < 1 {
+		t.Fatal("expected at least 1 finding for PAN")
+	}
+	if findings[0].Type != "PAN" {
+		t.Errorf("Type = %q, want PAN", findings[0].Type)
+	}
+}
+
+func TestScanBytesMatchDetect(t *testing.T) {
+	token := "ghp_" + strings.Repeat("a", 36)
+	bFindings := ScanBytes([]byte(token))
+	sFindings := Detect(token)
+
+	if len(bFindings) != len(sFindings) {
+		t.Fatalf("ScanBytes returned %d findings, Detect returned %d", len(bFindings), len(sFindings))
+	}
+	for i := range bFindings {
+		if bFindings[i].Type != sFindings[i].Type {
+			t.Errorf("finding[%d].Type: ScanBytes=%q Detect=%q", i, bFindings[i].Type, sFindings[i].Type)
+		}
+		if bFindings[i].Position != sFindings[i].Position {
+			t.Errorf("finding[%d].Position: ScanBytes=%d Detect=%d", i, bFindings[i].Position, sFindings[i].Position)
+		}
+	}
+}
+func TestScanBytesFalsePositive(t *testing.T) {
+	// Prefix check passes but regex doesn't match — exercises the
+	// no-match path through the pattern loop.
+	data := []byte("sk-incomplete")
+	findings := ScanBytes(data)
+	if len(findings) != 0 {
+		t.Errorf("expected 0 findings, got %d", len(findings))
+	}
+}
+
+func TestTruncateBytes(t *testing.T) {
+	tests := []struct {
+		in   string
+		want string
+	}{
+		{"ab", "ab"},
+		{"abcd", "abcd"},
+		{"abcde", "abcd..."},
+		{"hello world", "hell..."},
+	}
+	for _, tt := range tests {
+		got := truncateBytes([]byte(tt.in))
+		if got != tt.want {
+			t.Errorf("truncateBytes(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestLikelyPANBytes(t *testing.T) {
+	if likelyPANBytes([]byte("abc")) {
+		t.Error("abc should not be PAN")
+	}
+	if !likelyPANBytes([]byte("4111111111111")) {
+		t.Error("13 digits should be PAN")
+	}
+	if likelyPANBytes([]byte("1234abcd567890")) {
+		t.Error("digits interrupted by letters should not be PAN")
+	}
+	if !likelyPANBytes([]byte("4111-1111-1111-1111")) {
+		t.Error("16 digits with dashes should be PAN")
+	}
+}

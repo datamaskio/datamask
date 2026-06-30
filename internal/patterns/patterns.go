@@ -24,6 +24,13 @@ func (p *Pattern) FindIndex(s string) [][]int {
 	return p.re.FindAllStringIndex(s, -1)
 }
 
+// FindIndexBytes returns the byte-index pairs of all matches of the pattern
+// in b. Each pair is [start, end). Use this for zero-allocation scanning
+// when you already have []byte data (e.g., log output, JSON buffers).
+func (p *Pattern) FindIndexBytes(b []byte) [][]int {
+	return p.re.FindAllIndex(b, -1)
+}
+
 // Match reports whether the pattern matches the string s in its entirety.
 // This is stricter than Find — it checks that the whole string is a secret.
 func (p *Pattern) Match(s string) bool {
