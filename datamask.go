@@ -55,7 +55,24 @@ func (m *Masker) redact(v any) (any, error) {
 }
 
 func (m *Masker) redactVisited(v any, visited map[uintptr]bool) (any, error) {
+	// Maskable check: if the value implements Maskable, use Mask()
+	// instead of reflection-based walking.
+	if maskable, ok := v.(Maskable); ok {
+		return maskable.Mask(), nil
+	}
+
 	rv := reflect.ValueOf(v)
+
+	// Pointer-receiver Maskable: non-pointer T where *T implements Maskable.
+	if rv.Kind() != reflect.Pointer && reflect.PointerTo(rv.Type()).Implements(typeOfMaskable) {
+		newPtr := reflect.New(rv.Type())
+		newPtr.Elem().Set(rv)
+		result := newPtr.Interface().(Maskable).Mask()
+		if rResult := reflect.ValueOf(result); rResult.Kind() == reflect.Pointer {
+			return rResult.Elem().Interface(), nil
+		}
+		return result, nil
+	}
 
 	switch rv.Kind() {
 	case reflect.Pointer:
@@ -119,9 +136,19 @@ func (m *Masker) redactStructVisited(v any, visited map[uintptr]bool) (any, erro
 	cpPtr := reflect.New(t)
 	cpPtr.Elem().Set(reflect.ValueOf(v))
 
+	// Pass 0: tag-optional Maskable fields — fields whose type implements
+	// Maskable are redacted even without a mask tag.
+	applyMaskableFields(cpPtr.Elem())
+
 	// Pass 1: apply mask-tag transforms to tagged fields.
+	// Maskable takes precedence over tag strategy.
 	if len(meta.Fields) > 0 {
 		reflectx.Walk(cpPtr.Interface(), meta.Fields, func(fv reflect.Value, fm reflectx.FieldMeta) {
+			// Maskable takes precedence over tag-based strategy.
+			if result, ok := callMaskOnField(fv); ok {
+				fv.Set(reflect.ValueOf(result))
+				return
+			}
 			if fv.Kind() == reflect.String {
 				fv.SetString(m.transform(fv.String(), fm.Strategy))
 			}
@@ -150,9 +177,6 @@ func (m *Masker) redactStructVisited(v any, visited map[uintptr]bool) (any, erro
 		}
 	}
 
-	if len(meta.Fields) == 0 {
-		return cpPtr.Elem().Interface(), nil
-	}
 	return cpPtr.Elem().Interface(), nil
 }
 
@@ -193,14 +217,28 @@ func (m *Masker) RedactInPlace(v any) error {
 		panic("datamask: RedactInPlace requires a pointer to a struct")
 	}
 
+	// Tag-optional: apply Maskable to all fields.
+	applyMaskableFields(rv)
+
 	meta := m.getOrParseMeta(rv.Type())
 	if len(meta.Fields) == 0 {
 		return nil
 	}
 
 	reflectx.Walk(v, meta.Fields, func(fv reflect.Value, fm reflectx.FieldMeta) {
+		// Maskable takes precedence over tag-based strategy.
+		if result, ok := callMaskOnField(fv); ok {
+			fv.Set(reflect.ValueOf(result))
+			return
+		}
 		if fv.Kind() == reflect.String {
 			fv.SetString(m.transform(fv.String(), fm.Strategy))
+		}
+		if fv.Kind() == reflect.Pointer && !fv.IsNil() && fv.Elem().Kind() == reflect.String {
+			newVal := m.transform(fv.Elem().String(), fm.Strategy)
+			newPtr := reflect.New(fv.Type().Elem())
+			newPtr.Elem().SetString(newVal)
+			fv.Set(newPtr)
 		}
 	})
 
@@ -231,23 +269,32 @@ func (m *Masker) RedactPII() Policy {
 		if t.Kind() != reflect.Struct {
 			return v, nil
 		}
-		meta := m.getOrParseMeta(t)
-		if len(meta.Fields) == 0 {
-			return v, nil
-		}
 		cpPtr := shallowCopy(v)
-		reflectx.Walk(cpPtr, meta.Fields, func(fv reflect.Value, fm reflectx.FieldMeta) {
-			if fv.Kind() == reflect.String {
-				fv.SetString(m.transform(fv.String(), fm.Strategy))
-			}
-			if fv.Kind() == reflect.Pointer && !fv.IsNil() && fv.Elem().Kind() == reflect.String {
-				newVal := m.transform(fv.Elem().String(), fm.Strategy)
-				newPtr := reflect.New(fv.Type().Elem())
-				newPtr.Elem().SetString(newVal)
-				fv.Set(newPtr)
-			}
-		})
-		return reflect.ValueOf(cpPtr).Elem().Interface(), nil
+		rv := reflect.ValueOf(cpPtr).Elem()
+
+		// Tag-optional: apply Maskable to all fields.
+		applyMaskableFields(rv)
+
+		meta := m.getOrParseMeta(t)
+		if len(meta.Fields) > 0 {
+			reflectx.Walk(cpPtr, meta.Fields, func(fv reflect.Value, fm reflectx.FieldMeta) {
+				// Maskable takes precedence over tag-based strategy.
+				if result, ok := callMaskOnField(fv); ok {
+					fv.Set(reflect.ValueOf(result))
+					return
+				}
+				if fv.Kind() == reflect.String {
+					fv.SetString(m.transform(fv.String(), fm.Strategy))
+				}
+				if fv.Kind() == reflect.Pointer && !fv.IsNil() && fv.Elem().Kind() == reflect.String {
+					newVal := m.transform(fv.Elem().String(), fm.Strategy)
+					newPtr := reflect.New(fv.Type().Elem())
+					newPtr.Elem().SetString(newVal)
+					fv.Set(newPtr)
+				}
+			})
+		}
+		return rv.Interface(), nil
 	}
 }
 
@@ -259,26 +306,35 @@ func (m *Masker) HashEmails() Policy {
 		if t.Kind() != reflect.Struct {
 			return v, nil
 		}
-		meta := m.getOrParseMeta(t)
-		if len(meta.Fields) == 0 {
-			return v, nil
-		}
 		cpPtr := shallowCopy(v)
-		reflectx.Walk(cpPtr, meta.Fields, func(fv reflect.Value, fm reflectx.FieldMeta) {
-			if fm.Strategy != HashStrategy {
-				return
-			}
-			if fv.Kind() == reflect.String {
-				fv.SetString(Hash(fv.String()))
-			}
-			if fv.Kind() == reflect.Pointer && !fv.IsNil() && fv.Elem().Kind() == reflect.String {
-				newVal := Hash(fv.Elem().String())
-				newPtr := reflect.New(fv.Type().Elem())
-				newPtr.Elem().SetString(newVal)
-				fv.Set(newPtr)
-			}
-		})
-		return reflect.ValueOf(cpPtr).Elem().Interface(), nil
+		rv := reflect.ValueOf(cpPtr).Elem()
+
+		// Tag-optional: apply Maskable to all fields.
+		applyMaskableFields(rv)
+
+		meta := m.getOrParseMeta(t)
+		if len(meta.Fields) > 0 {
+			reflectx.Walk(cpPtr, meta.Fields, func(fv reflect.Value, fm reflectx.FieldMeta) {
+				// Maskable takes precedence over hash strategy.
+				if result, ok := callMaskOnField(fv); ok {
+					fv.Set(reflect.ValueOf(result))
+					return
+				}
+				if fm.Strategy != HashStrategy {
+					return
+				}
+				if fv.Kind() == reflect.String {
+					fv.SetString(Hash(fv.String()))
+				}
+				if fv.Kind() == reflect.Pointer && !fv.IsNil() && fv.Elem().Kind() == reflect.String {
+					newVal := Hash(fv.Elem().String())
+					newPtr := reflect.New(fv.Type().Elem())
+					newPtr.Elem().SetString(newVal)
+					fv.Set(newPtr)
+				}
+			})
+		}
+		return rv.Interface(), nil
 	}
 }
 
