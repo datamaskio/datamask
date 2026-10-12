@@ -10,11 +10,6 @@ import (
 // MaskTag is the struct tag key used to mark sensitive fields.
 const MaskTag = "mask"
 
-// newCache returns a ready-to-use type metadata cache.
-func newCache() *reflectx.Cache {
-	return &reflectx.Cache{}
-}
-
 // parseTags walks the struct type t and returns metadata for every field
 // tagged with mask:"...". Embedded structs are walked recursively;
 // pointer fields are followed (dereferenced).

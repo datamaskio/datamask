@@ -3,6 +3,7 @@ package datamask
 import (
 	"fmt"
 	"reflect"
+	"sync"
 
 	"github.com/datamaskio/datamask/internal/reflectx"
 )
@@ -10,8 +11,8 @@ import (
 // Masker is the core redaction engine. Create one with New and reuse it
 // across goroutines. A zero-value Masker is not usable; always use New.
 type Masker struct {
-	cfg   Config
-	cache *reflectx.Cache
+	cfg     Config
+	schemas *sync.Map // map[reflect.Type]*compiledSchema; nil means not created by New
 }
 
 // New creates a Masker with the given options. A Masker is safe for
@@ -21,7 +22,7 @@ func New(opts ...Option) *Masker {
 		cfg: Config{
 			DetectSecrets: true,
 		},
-		cache: newCache(),
+		schemas: &sync.Map{},
 	}
 	for _, o := range opts {
 		o(&m.cfg)
@@ -36,7 +37,7 @@ func (m *Masker) check() error {
 	if m == nil {
 		return ErrNilReceiver
 	}
-	if m.cache == nil {
+	if m.schemas == nil {
 		return ErrUninitialized
 	}
 	return nil
@@ -52,16 +53,19 @@ func (m *Masker) check() error {
 //
 // If v's type has no mask-tagged fields, the copy is returned unchanged.
 func Redact[T any](m *Masker, v T) (T, error) {
+	// Same path as Compile[T](m).Redact(v), but the Schema stays on the
+	// stack so the convenience wrapper allocates nothing extra.
 	if err := m.check(); err != nil {
 		var zero T
 		return zero, err
 	}
-	result, err := m.redact(v)
+	plan, err := m.compile(reflect.TypeFor[T]())
 	if err != nil {
 		var zero T
 		return zero, err
 	}
-	return result.(T), nil
+	s := Schema[T]{masker: m, plan: plan}
+	return s.Redact(v)
 }
 
 // redact is the type-erased implementation. It handles structs, slices,
@@ -74,6 +78,9 @@ func (m *Masker) redactVisited(v any, visited map[uintptr]bool) (any, error) {
 	// Maskable check: if the value implements Maskable, use Mask()
 	// instead of reflection-based walking.
 	rv := reflect.ValueOf(v)
+	if !rv.IsValid() {
+		return nil, fmt.Errorf("%w: nil value", ErrInvalidInput)
+	}
 	if maskable, ok := v.(Maskable); ok {
 		return checkMaskResult(rv.Type(), maskable)
 	}
@@ -426,18 +433,14 @@ func (m *Masker) HashEmails() Policy {
 	}
 }
 
-// getOrParseMeta returns the cached TypeMeta for t, parsing and caching
-// it if this is the first lookup.
+// getOrParseMeta returns the field metadata for struct type t from the
+// Masker's compiled-schema cache, compiling it on first use.
 func (m *Masker) getOrParseMeta(t reflect.Type) (*reflectx.TypeMeta, error) {
-	if meta, ok := m.cache.Load(t); ok {
-		return meta, nil
-	}
-	meta, err := parseTags(t)
+	plan, err := m.compile(t)
 	if err != nil {
 		return nil, err
 	}
-	m.cache.Store(t, meta)
-	return meta, nil
+	return plan.meta, nil
 }
 
 // transform applies the transform to s using the Masker's configuration.

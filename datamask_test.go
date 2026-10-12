@@ -46,8 +46,8 @@ func TestNewDefault(t *testing.T) {
 	if m.cfg.DetectSecrets != true {
 		t.Error("DetectSecrets should default to true")
 	}
-	if m.cache == nil {
-		t.Error("cache should be initialized")
+	if m.schemas == nil {
+		t.Error("schema cache should be initialized")
 	}
 }
 
@@ -486,11 +486,11 @@ func TestMaskerReusesCache(t *testing.T) {
 	_, _ = Redact(m, customer{Name: "B", Email: "c@d.com"})
 
 	// Cache should be populated after first call.
-	meta, ok := m.cache.Load(reflect.TypeFor[customer]())
+	entry, ok := m.schemas.Load(reflect.TypeFor[customer]())
 	if !ok {
-		t.Error("cache miss after Redact — type should have been stored")
+		t.Fatal("cache miss after Redact — type should have been stored")
 	}
-	if len(meta.Fields) == 0 {
+	if len(entry.(*compiledSchema).meta.Fields) == 0 {
 		t.Error("cached TypeMeta has no fields")
 	}
 }
@@ -797,10 +797,10 @@ func TestCacheSharedAcrossRecursiveCalls(t *testing.T) {
 	_, _ = Redact(m, v)
 
 	// Inner should be cached exactly once (all 3 elements share the cache).
-	if _, ok := m.cache.Load(reflect.TypeFor[Inner]()); !ok {
+	if _, ok := m.schemas.Load(reflect.TypeFor[Inner]()); !ok {
 		t.Error("Inner type not cached after recursive redaction")
 	}
-	if _, ok := m.cache.Load(reflect.TypeFor[Outer]()); !ok {
+	if _, ok := m.schemas.Load(reflect.TypeFor[Outer]()); !ok {
 		t.Error("Outer type not cached")
 	}
 }
@@ -812,10 +812,10 @@ func TestMaskerCacheDifferentTypes(t *testing.T) {
 	_, _ = Redact(m, untagged{})
 
 	// Both types should be cached.
-	if _, ok := m.cache.Load(reflect.TypeFor[customer]()); !ok {
+	if _, ok := m.schemas.Load(reflect.TypeFor[customer]()); !ok {
 		t.Error("customer type not cached")
 	}
-	if _, ok := m.cache.Load(reflect.TypeFor[untagged]()); !ok {
+	if _, ok := m.schemas.Load(reflect.TypeFor[untagged]()); !ok {
 		t.Error("untagged type not cached")
 	}
 }
