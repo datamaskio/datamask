@@ -42,7 +42,9 @@ var (
 	ErrInvalidSchema = errors.New("datamask: invalid schema")
 
 	// ErrMaskFailed is returned when a Maskable.Mask() implementation returns
-	// an error. The field is left unchanged in the output.
+	// an error or a value of the wrong type. Redact returns the zero value of T;
+	// RedactInPlace zeroes the failing field. The unmasked value is never
+	// returned. errors.Is also matches the error from Mask().
 	ErrMaskFailed = errors.New("datamask: masking failed")
 
 	// ErrCyclicReference is returned when a cyclic struct graph is detected

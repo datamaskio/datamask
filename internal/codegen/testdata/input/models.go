@@ -38,12 +38,12 @@ type Wrapper[T any] struct {
 // treats it as Maskable.
 type EmailMask string
 
-func (e EmailMask) Mask() any {
+func (e EmailMask) Mask() (any, error) {
 	s := string(e)
 	if idx := strings.Index(s, "@"); idx > 0 {
-		return EmailMask(s[:1] + "***" + s[idx:])
+		return EmailMask(s[:1] + "***" + s[idx:]), nil
 	}
-	return EmailMask("[EMAIL]")
+	return EmailMask("[EMAIL]"), nil
 }
 
 // WithMaskable has a Maskable-typed field without a mask tag (tag-optional).

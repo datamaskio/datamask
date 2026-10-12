@@ -30,6 +30,18 @@ func New(opts ...Option) *Masker {
 	return m
 }
 
+// check validates the receiver: nil → ErrNilReceiver, zero-value Masker
+// (not created by New) → ErrUninitialized.
+func (m *Masker) check() error {
+	if m == nil {
+		return ErrNilReceiver
+	}
+	if m.cache == nil {
+		return ErrUninitialized
+	}
+	return nil
+}
+
 // Redact is the generic entry point for struct redaction. It returns a
 // shallow copy of v with all mask-tagged fields replaced by their
 // redaction placeholder.
@@ -40,6 +52,10 @@ func New(opts ...Option) *Masker {
 //
 // If v's type has no mask-tagged fields, the copy is returned unchanged.
 func Redact[T any](m *Masker, v T) (T, error) {
+	if err := m.check(); err != nil {
+		var zero T
+		return zero, err
+	}
 	result, err := m.redact(v)
 	if err != nil {
 		var zero T
@@ -57,24 +73,16 @@ func (m *Masker) redact(v any) (any, error) {
 func (m *Masker) redactVisited(v any, visited map[uintptr]bool) (any, error) {
 	// Maskable check: if the value implements Maskable, use Mask()
 	// instead of reflection-based walking.
-	if maskable, ok := v.(Maskable); ok {
-		return maskable.Mask()
-	}
-
 	rv := reflect.ValueOf(v)
+	if maskable, ok := v.(Maskable); ok {
+		return checkMaskResult(rv.Type(), maskable)
+	}
 
 	// Pointer-receiver Maskable: non-pointer T where *T implements Maskable.
 	if rv.Kind() != reflect.Pointer && reflect.PointerTo(rv.Type()).Implements(typeOfMaskable) {
 		newPtr := reflect.New(rv.Type())
 		newPtr.Elem().Set(rv)
-		result, err := newPtr.Interface().(Maskable).Mask()
-		if err != nil {
-			return nil, fmt.Errorf("%w: %w", ErrMaskFailed, err)
-		}
-		if rResult := reflect.ValueOf(result); rResult.Kind() == reflect.Pointer {
-			return rResult.Elem().Interface(), nil
-		}
-		return result, nil
+		return checkMaskResult(rv.Type(), newPtr.Interface().(Maskable))
 	}
 
 	switch rv.Kind() {
@@ -107,8 +115,7 @@ func (m *Masker) redactVisited(v any, visited map[uintptr]bool) (any, error) {
 			elem := rv.Index(i).Interface()
 			redacted, err := m.redactVisited(elem, visited)
 			if err != nil {
-				out.Index(i).Set(rv.Index(i))
-				continue
+				return nil, err
 			}
 			out.Index(i).Set(reflect.ValueOf(redacted))
 		}
@@ -120,8 +127,7 @@ func (m *Masker) redactVisited(v any, visited map[uintptr]bool) (any, error) {
 			elem := rv.Index(i).Interface()
 			redacted, err := m.redactVisited(elem, visited)
 			if err != nil {
-				out.Index(i).Set(rv.Index(i))
-				continue
+				return nil, err
 			}
 			out.Index(i).Set(reflect.ValueOf(redacted))
 		}
@@ -144,15 +150,20 @@ func (m *Masker) redactStructVisited(v any, visited map[uintptr]bool) (any, erro
 
 	// Pass 0: tag-optional Maskable fields — fields whose type implements
 	// Maskable are redacted even without a mask tag.
-	applyMaskableFields(cpPtr.Elem())
+	if err := applyMaskableFields(cpPtr.Elem()); err != nil {
+		return nil, err
+	}
 
 	// Pass 1: apply mask-tag transforms to tagged fields.
 	// Maskable takes precedence over tag transform.
+	var maskErr error
 	if len(meta.Fields) > 0 {
-		reflectx.Walk(cpPtr.Interface(), meta.Fields, func(fv reflect.Value, fm reflectx.FieldMeta) {
+		walkErr := reflectx.Walk(cpPtr.Interface(), meta.Fields, func(fv reflect.Value, fm reflectx.FieldMeta) {
 			// Maskable takes precedence over tag-based transform.
-			if result, err, ok := callMaskOnField(fv); ok && err == nil && result != nil {
-				fv.Set(reflect.ValueOf(result))
+			if ok, err := maskField(fv); ok {
+				if err != nil && maskErr == nil {
+					maskErr = err
+				}
 				return
 			}
 			if fv.Kind() == reflect.String {
@@ -165,6 +176,13 @@ func (m *Masker) redactStructVisited(v any, visited map[uintptr]bool) (any, erro
 				fv.Set(newPtr)
 			}
 		})
+		if walkErr != nil {
+			return nil, fmt.Errorf("%w: %v", ErrUnsupportedType, walkErr)
+		}
+	}
+
+	if maskErr != nil {
+		return nil, maskErr
 	}
 
 	// Pass 2: recursively redact container fields.
@@ -178,9 +196,10 @@ func (m *Masker) redactStructVisited(v any, visited map[uintptr]bool) (any, erro
 			continue
 		}
 		redacted, err := m.redactVisited(fv.Interface(), visited)
-		if err == nil {
-			fv.Set(reflect.ValueOf(redacted))
+		if err != nil {
+			return nil, err
 		}
+		fv.Set(reflect.ValueOf(redacted))
 	}
 
 	return cpPtr.Elem().Interface(), nil
@@ -204,6 +223,9 @@ func needsRecurse(v reflect.Value) bool {
 // and returns any. Prefer the generic Redact[T] when the concrete type
 // is known at compile time.
 func (m *Masker) RedactAny(v any) (any, error) {
+	if err := m.check(); err != nil {
+		return nil, err
+	}
 	return m.redact(v)
 }
 
@@ -215,8 +237,8 @@ func (m *Masker) RedactAny(v any) (any, error) {
 // Use this for high-throughput code paths where allocations must be
 // minimized.
 func (m *Masker) RedactInPlace(v any) error {
-	if m == nil {
-		return ErrNilReceiver
+	if err := m.check(); err != nil {
+		return err
 	}
 	rv := reflect.ValueOf(v)
 	if rv.Kind() != reflect.Pointer {
@@ -230,21 +252,24 @@ func (m *Masker) RedactInPlace(v any) error {
 		return fmt.Errorf("%w: expected pointer to struct, got pointer to %v", ErrUnsupportedType, rv.Kind())
 	}
 
-	// Tag-optional: apply Maskable to all fields.
-	applyMaskableFields(rv)
+	// Tag-optional: apply Maskable to all fields. Failing fields are zeroed;
+	// masking continues so no other field is left unmasked.
+	maskErr := applyMaskableFields(rv)
 
 	meta, err := m.getOrParseMeta(rv.Type())
 	if err != nil {
 		return err
 	}
 	if len(meta.Fields) == 0 {
-		return nil
+		return maskErr
 	}
 
-	reflectx.Walk(v, meta.Fields, func(fv reflect.Value, fm reflectx.FieldMeta) {
+	walkErr := reflectx.Walk(v, meta.Fields, func(fv reflect.Value, fm reflectx.FieldMeta) {
 		// Maskable takes precedence over tag-based transform.
-		if result, err, ok := callMaskOnField(fv); ok && err == nil && result != nil {
-			fv.Set(reflect.ValueOf(result))
+		if ok, err := maskField(fv); ok {
+			if err != nil && maskErr == nil {
+				maskErr = err
+			}
 			return
 		}
 		if fv.Kind() == reflect.String {
@@ -257,8 +282,11 @@ func (m *Masker) RedactInPlace(v any) error {
 			fv.Set(newPtr)
 		}
 	})
+	if walkErr != nil {
+		return fmt.Errorf("%w: %v", ErrUnsupportedType, walkErr)
+	}
 
-	return nil
+	return maskErr
 }
 
 // Apply applies a custom policy to v and returns the result.
@@ -269,18 +297,31 @@ func (m *Masker) RedactInPlace(v any) error {
 //	    masker.HashEmails(),
 //	))
 func Apply[T any](m *Masker, v T, policy Policy) (T, error) {
-	result, err := policy(v)
-	if err != nil {
-		var zero T
+	var zero T
+	if err := m.check(); err != nil {
 		return zero, err
 	}
-	return result.(T), nil
+	if policy == nil {
+		return zero, fmt.Errorf("%w: nil policy", ErrInvalidInput)
+	}
+	result, err := policy(v)
+	if err != nil {
+		return zero, err
+	}
+	out, ok := result.(T)
+	if !ok {
+		return zero, fmt.Errorf("%w: policy returned %T, want %T", ErrInvalidInput, result, zero)
+	}
+	return out, nil
 }
 
 // RedactPII returns a Policy that redacts all mask-tagged fields using the
 // Masker's configuration.
 func (m *Masker) RedactPII() Policy {
 	return func(v any) (any, error) {
+		if err := m.check(); err != nil {
+			return nil, err
+		}
 		t := reflect.TypeOf(v)
 		if t.Kind() != reflect.Struct {
 			return v, nil
@@ -289,17 +330,22 @@ func (m *Masker) RedactPII() Policy {
 		rv := reflect.ValueOf(cpPtr).Elem()
 
 		// Tag-optional: apply Maskable to all fields.
-		applyMaskableFields(rv)
+		if err := applyMaskableFields(rv); err != nil {
+			return nil, err
+		}
 
 		meta, err := m.getOrParseMeta(t)
 		if err != nil {
 			return nil, err
 		}
+		var maskErr error
 		if len(meta.Fields) > 0 {
-			reflectx.Walk(cpPtr, meta.Fields, func(fv reflect.Value, fm reflectx.FieldMeta) {
+			walkErr := reflectx.Walk(cpPtr, meta.Fields, func(fv reflect.Value, fm reflectx.FieldMeta) {
 				// Maskable takes precedence over tag-based transform.
-				if result, err, ok := callMaskOnField(fv); ok && err == nil && result != nil {
-					fv.Set(reflect.ValueOf(result))
+				if ok, err := maskField(fv); ok {
+					if err != nil && maskErr == nil {
+						maskErr = err
+					}
 					return
 				}
 				if fv.Kind() == reflect.String {
@@ -312,6 +358,12 @@ func (m *Masker) RedactPII() Policy {
 					fv.Set(newPtr)
 				}
 			})
+			if walkErr != nil {
+				return nil, fmt.Errorf("%w: %v", ErrUnsupportedType, walkErr)
+			}
+		}
+		if maskErr != nil {
+			return nil, maskErr
 		}
 		return rv.Interface(), nil
 	}
@@ -321,6 +373,9 @@ func (m *Masker) RedactPII() Policy {
 // using SHA-256. Other mask-tagged fields are left unchanged.
 func (m *Masker) HashEmails() Policy {
 	return func(v any) (any, error) {
+		if err := m.check(); err != nil {
+			return nil, err
+		}
 		t := reflect.TypeOf(v)
 		if t.Kind() != reflect.Struct {
 			return v, nil
@@ -329,17 +384,22 @@ func (m *Masker) HashEmails() Policy {
 		rv := reflect.ValueOf(cpPtr).Elem()
 
 		// Tag-optional: apply Maskable to all fields.
-		applyMaskableFields(rv)
+		if err := applyMaskableFields(rv); err != nil {
+			return nil, err
+		}
 
 		meta, err := m.getOrParseMeta(t)
 		if err != nil {
 			return nil, err
 		}
+		var maskErr error
 		if len(meta.Fields) > 0 {
-			reflectx.Walk(cpPtr, meta.Fields, func(fv reflect.Value, fm reflectx.FieldMeta) {
+			walkErr := reflectx.Walk(cpPtr, meta.Fields, func(fv reflect.Value, fm reflectx.FieldMeta) {
 				// Maskable takes precedence over hash transform.
-				if result, err, ok := callMaskOnField(fv); ok && err == nil && result != nil {
-					fv.Set(reflect.ValueOf(result))
+				if ok, err := maskField(fv); ok {
+					if err != nil && maskErr == nil {
+						maskErr = err
+					}
 					return
 				}
 				if fm.Transform != TransformHash {
@@ -355,6 +415,12 @@ func (m *Masker) HashEmails() Policy {
 					fv.Set(newPtr)
 				}
 			})
+			if walkErr != nil {
+				return nil, fmt.Errorf("%w: %v", ErrUnsupportedType, walkErr)
+			}
+		}
+		if maskErr != nil {
+			return nil, maskErr
 		}
 		return rv.Interface(), nil
 	}
@@ -405,4 +471,23 @@ func shallowCopy(v any) any {
 	cpPtr := reflect.New(rv.Type())
 	cpPtr.Elem().Set(rv)
 	return cpPtr.Interface()
+}
+
+// checkMaskResult calls Mask() and verifies the result has type want
+// (dereferencing a returned pointer for pointer-receiver types). Any
+// failure wraps ErrMaskFailed so callers never see an unmasked value.
+func checkMaskResult(want reflect.Type, mk Maskable) (any, error) {
+	result, err := mk.Mask()
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrMaskFailed, err)
+	}
+	rv := reflect.ValueOf(result)
+	if rv.IsValid() && rv.Kind() == reflect.Pointer && want.Kind() != reflect.Pointer && !rv.IsNil() {
+		rv = rv.Elem()
+		result = rv.Interface()
+	}
+	if !rv.IsValid() || rv.Type() != want {
+		return nil, fmt.Errorf("%w: Mask() returned %T, want %v", ErrMaskFailed, result, want)
+	}
+	return result, nil
 }

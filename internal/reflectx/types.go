@@ -54,10 +54,10 @@ func (d DataType) String() string {
 type Transform uint8
 
 const (
-	TransformRedact    Transform = iota // replace with placeholder (e.g. "[EMAIL]")
-	TransformHash                       // replace with SHA-256 hash
-	TransformTokenize                   // replace with stable pseudonym
-	TransformPartial                    // partially mask (e.g. "j***@example.com")
+	TransformRedact   Transform = iota // replace with placeholder (e.g. "[EMAIL]")
+	TransformHash                      // replace with SHA-256 hash
+	TransformTokenize                  // replace with stable pseudonym
+	TransformPartial                   // partially mask (e.g. "j***@example.com")
 )
 
 // String returns the string representation of the Transform.

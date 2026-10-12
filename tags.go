@@ -98,11 +98,6 @@ func dataTypeFromString(s string) reflectx.DataType {
 	}
 }
 
-// isKnownDataType reports whether s is a recognized data type string.
-func isKnownDataType(s string) bool {
-	return dataTypeFromString(s) != reflectx.DataTypeUnknown
-}
-
 // transformFromString maps a string to a Transform.
 func transformFromString(s string) reflectx.Transform {
 	switch strings.ToLower(s) {

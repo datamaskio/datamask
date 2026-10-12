@@ -184,7 +184,7 @@ type Secret struct {
 	if err != nil {
 		t.Fatalf("read generated file: %v", err)
 	}
-	if !strings.Contains(string(content), "func (s Secret) Mask() any {") {
+	if !strings.Contains(string(content), "func (s Secret) Mask() (any, error) {") {
 		t.Error("generated file missing Mask method")
 	}
 	if !strings.Contains(string(content), "var _ datamask.Maskable = Secret{}") {
@@ -326,5 +326,129 @@ func TestLooksMaskableDefault(t *testing.T) {
 	sel := &ast.SelectorExpr{X: &ast.Ident{Name: "p"}, Sel: &ast.Ident{Name: "T"}}
 	if looksMaskable(sel) {
 		t.Error("SelectorExpr should not be Maskable")
+	}
+}
+
+// TestGeneratedFailsClosedAtRuntime builds a package whose Maskable field
+// errors or returns the wrong type, generates Mask() for its parent, and
+// runs it: the generated method must return the zero struct wrapped in
+// datamask.ErrMaskFailed and never the unmasked value.
+func TestGeneratedFailsClosedAtRuntime(t *testing.T) {
+	modRoot, _ := filepath.Abs("../..")
+	tmpDir, err := os.MkdirTemp(modRoot, "codegen-runtime-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	src := `package tmp
+
+import "errors"
+
+var errBoom = errors.New("boom")
+
+type BadMask string
+
+func (BadMask) Mask() (any, error) { return nil, errBoom }
+
+type WrongMask string
+
+func (WrongMask) Mask() (any, error) { return 42, nil }
+
+type GoodMask string
+
+func (GoodMask) Mask() (any, error) { return GoodMask("***"), nil }
+
+type Fails struct {
+	Name  string
+	Field BadMask
+}
+
+type FailsPtr struct {
+	Field *BadMask
+}
+
+type Wrong struct {
+	Field WrongMask
+}
+
+type Good struct {
+	Name  string
+	Field GoodMask
+	Ptr   *GoodMask
+}
+`
+	test := `package tmp
+
+import (
+	"errors"
+	"testing"
+
+	"github.com/datamaskio/datamask"
+)
+
+func TestFailClosed(t *testing.T) {
+	bad := BadMask("secret")
+	for name, fn := range map[string]func() (any, error){
+		"error":   Fails{Name: "n", Field: "secret"}.Mask,
+		"pointer": FailsPtr{Field: &bad}.Mask,
+		"wrong":   Wrong{Field: "secret"}.Mask,
+	} {
+		got, err := fn()
+		if !errors.Is(err, datamask.ErrMaskFailed) {
+			t.Errorf("%s: err = %v, want ErrMaskFailed", name, err)
+		}
+		switch g := got.(type) {
+		case Fails:
+			if g != (Fails{}) || !errors.Is(err, errBoom) {
+				t.Errorf("%s: got %+v, want zero wrapping errBoom", name, g)
+			}
+		case FailsPtr:
+			if g.Field != nil {
+				t.Errorf("%s: got %+v, want zero", name, g)
+			}
+		case Wrong:
+			if g != (Wrong{}) {
+				t.Errorf("%s: got %+v, want zero", name, g)
+			}
+		default:
+			t.Errorf("%s: unexpected result %T", name, got)
+		}
+	}
+}
+
+func TestGoodMasks(t *testing.T) {
+	p := GoodMask("secret")
+	orig := Good{Name: "n", Field: "secret", Ptr: &p}
+	got, err := orig.Mask()
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := got.(Good)
+	if g.Field != "***" || *g.Ptr != "***" {
+		t.Errorf("got %+v", g)
+	}
+	if p != "secret" {
+		t.Error("original pointee mutated")
+	}
+}
+`
+	if err := os.WriteFile(filepath.Join(tmpDir, "models.go"), []byte(src), 0644); err != nil {
+		t.Fatal(err)
+	}
+	files, err := GeneratedFiles(tmpDir)
+	if err != nil || len(files) != 1 {
+		t.Fatalf("GeneratedFiles = %d files, err %v", len(files), err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, filepath.Base(files[0].Path)), files[0].Content, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "runtime_test.go"), []byte(test), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := exec.Command("go", "test", "-C", modRoot, "."+string(filepath.Separator)+filepath.Base(tmpDir)).CombinedOutput()
+	if err != nil {
+		t.Fatalf("generated code failed at runtime:\n%s", out)
 	}
 }

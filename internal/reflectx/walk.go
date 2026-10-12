@@ -1,6 +1,12 @@
 package reflectx
 
-import "reflect"
+import (
+	"errors"
+	"reflect"
+)
+
+// ErrNotStruct is returned by Walk when v is not a struct or a pointer to one.
+var ErrNotStruct = errors.New("reflectx: Walk called with non-struct value")
 
 // Walk traverses the struct fields described by fields on the value v and
 // calls visitor for each field that is valid and exported.
@@ -14,19 +20,21 @@ import "reflect"
 // visitor receives the reflect.Value of the field and the corresponding
 // FieldMeta. The field value is settable only if v was an addressable
 // pointer to a struct; otherwise the visitor can read but not mutate.
-func Walk(v any, fields []FieldMeta, visitor func(field reflect.Value, fm FieldMeta)) {
+//
+// Walk returns ErrNotStruct if v is neither; it never panics.
+func Walk(v any, fields []FieldMeta, visitor func(field reflect.Value, fm FieldMeta)) error {
 	rv := reflect.ValueOf(v)
 
 	// Dereference pointer.
 	if rv.Kind() == reflect.Pointer {
 		if rv.IsNil() {
-			return
+			return nil
 		}
 		rv = rv.Elem()
 	}
 
 	if rv.Kind() != reflect.Struct {
-		panic("reflectx: Walk called with non-struct value")
+		return ErrNotStruct
 	}
 
 	for _, fm := range fields {
@@ -36,6 +44,7 @@ func Walk(v any, fields []FieldMeta, visitor func(field reflect.Value, fm FieldM
 		}
 		visitor(fv, fm)
 	}
+	return nil
 }
 
 // fieldByIndex walks the value tree step by step following the index path.

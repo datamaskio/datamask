@@ -819,3 +819,55 @@ func TestMaskerCacheDifferentTypes(t *testing.T) {
 		t.Error("untagged type not cached")
 	}
 }
+
+func TestMaskerZeroAndNilGuards(t *testing.T) {
+	type rec struct {
+		Email string `mask:"email"`
+	}
+	cases := []struct {
+		name string
+		m    *Masker
+		want error
+	}{
+		{"nil", nil, ErrNilReceiver},
+		{"zero value", &Masker{}, ErrUninitialized},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			v := rec{Email: "a@b.c"}
+			if got, err := Redact(tc.m, v); !errors.Is(err, tc.want) || got != (rec{}) {
+				t.Errorf("Redact = (%+v, %v), want zero and %v", got, err, tc.want)
+			}
+			if _, err := tc.m.RedactAny(v); !errors.Is(err, tc.want) {
+				t.Errorf("RedactAny err = %v, want %v", err, tc.want)
+			}
+			if err := tc.m.RedactInPlace(&v); !errors.Is(err, tc.want) {
+				t.Errorf("RedactInPlace err = %v, want %v", err, tc.want)
+			}
+			if v.Email != "a@b.c" {
+				t.Errorf("input mutated: %q", v.Email)
+			}
+			if _, err := tc.m.RedactPII()(v); !errors.Is(err, tc.want) {
+				t.Errorf("RedactPII err = %v, want %v", err, tc.want)
+			}
+			if _, err := tc.m.HashEmails()(v); !errors.Is(err, tc.want) {
+				t.Errorf("HashEmails err = %v, want %v", err, tc.want)
+			}
+			if _, err := Apply(tc.m, v, func(a any) (any, error) { return a, nil }); !errors.Is(err, tc.want) {
+				t.Errorf("Apply err = %v, want %v", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestApplyNilAndBadPolicy(t *testing.T) {
+	type rec struct{ A string }
+	m := New()
+	if _, err := Apply(m, rec{}, nil); !errors.Is(err, ErrInvalidInput) {
+		t.Errorf("nil policy err = %v", err)
+	}
+	bad := func(any) (any, error) { return 42, nil }
+	if _, err := Apply(m, rec{}, bad); !errors.Is(err, ErrInvalidInput) {
+		t.Errorf("wrong-type policy err = %v", err)
+	}
+}

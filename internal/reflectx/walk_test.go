@@ -1,6 +1,7 @@
 package reflectx
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 )
@@ -139,27 +140,17 @@ func TestWalkInvalidFieldIndex(t *testing.T) {
 	}
 }
 
-func TestWalkPanicsOnNonStruct(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic for non-struct value")
-		}
-	}()
-
-	fields := []FieldMeta{{Index: []int{0}, Transform: TransformRedact}}
-	Walk(42, fields, func(fv reflect.Value, fm FieldMeta) {})
-}
-
-func TestWalkPanicsOnNonStructPointer(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic for pointer-to-non-struct")
-		}
-	}()
-
+func TestWalkErrorsOnNonStruct(t *testing.T) {
 	var x int = 42
 	fields := []FieldMeta{{Index: []int{0}, Transform: TransformRedact}}
-	Walk(&x, fields, func(fv reflect.Value, fm FieldMeta) {})
+	for _, v := range []any{42, &x} {
+		err := Walk(v, fields, func(fv reflect.Value, fm FieldMeta) {
+			t.Error("visitor must not be called")
+		})
+		if !errors.Is(err, ErrNotStruct) {
+			t.Errorf("Walk(%T) err = %v, want ErrNotStruct", v, err)
+		}
+	}
 }
 
 func TestWalkEmbeddedStruct(t *testing.T) {

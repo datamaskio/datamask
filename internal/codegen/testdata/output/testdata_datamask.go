@@ -2,13 +2,18 @@
 
 package testdata
 
-import "github.com/datamaskio/datamask"
+import (
+	"fmt"
+
+	"github.com/datamaskio/datamask"
+)
 
 var _masker = datamask.New()
 
 func (c Config) Mask() (any, error) {
 	if c.Token != nil {
-		(*c.Token) = "[REDACTED]"
+		redacted := "[REDACTED]"
+		c.Token = &redacted
 	}
 	return c, nil
 }
@@ -24,9 +29,12 @@ func (u User) Mask() (any, error) {
 var _ datamask.Maskable = User{}
 
 func (w WithMaskable) Mask() (any, error) {
-	masked := w.Email.Mask()
-	if v, ok := masked.(EmailMask); ok {
+	if masked, err := w.Email.Mask(); err != nil {
+		return WithMaskable{}, fmt.Errorf("%w: Email: %w", datamask.ErrMaskFailed, err)
+	} else if v, ok := masked.(EmailMask); ok {
 		w.Email = v
+	} else {
+		return WithMaskable{}, fmt.Errorf("%w: Email: Mask() returned %T, want EmailMask", datamask.ErrMaskFailed, masked)
 	}
 	return w, nil
 }
@@ -35,9 +43,12 @@ var _ datamask.Maskable = WithMaskable{}
 
 func (w WithMaskablePointer) Mask() (any, error) {
 	if w.Email != nil {
-		masked := w.Email.Mask()
-		if v, ok := masked.(EmailMask); ok {
+		if masked, err := w.Email.Mask(); err != nil {
+			return WithMaskablePointer{}, fmt.Errorf("%w: Email: %w", datamask.ErrMaskFailed, err)
+		} else if v, ok := masked.(EmailMask); ok {
 			w.Email = &v
+		} else {
+			return WithMaskablePointer{}, fmt.Errorf("%w: Email: Mask() returned %T, want EmailMask", datamask.ErrMaskFailed, masked)
 		}
 	}
 	return w, nil
@@ -46,9 +57,12 @@ func (w WithMaskablePointer) Mask() (any, error) {
 var _ datamask.Maskable = WithMaskablePointer{}
 
 func (w WithMaskableTag) Mask() (any, error) {
-	masked := w.Email.Mask()
-	if v, ok := masked.(EmailMask); ok {
+	if masked, err := w.Email.Mask(); err != nil {
+		return WithMaskableTag{}, fmt.Errorf("%w: Email: %w", datamask.ErrMaskFailed, err)
+	} else if v, ok := masked.(EmailMask); ok {
 		w.Email = v
+	} else {
+		return WithMaskableTag{}, fmt.Errorf("%w: Email: Mask() returned %T, want EmailMask", datamask.ErrMaskFailed, masked)
 	}
 	return w, nil
 }
@@ -63,7 +77,10 @@ func (w WithOmit) Mask() (any, error) {
 var _ datamask.Maskable = WithOmit{}
 
 func (w Wrapper[T]) Mask() (any, error) {
-	masked, _ := datamask.Redact(_masker, w)
+	masked, err := datamask.Redact(_masker, w)
+	if err != nil {
+		return Wrapper[T]{}, err
+	}
 	return masked, nil
 }
 

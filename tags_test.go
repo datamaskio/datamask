@@ -274,3 +274,26 @@ func indexEqual(a, b []int) bool {
 	}
 	return true
 }
+
+func TestParseTagValueAliasesAndCase(t *testing.T) {
+	tests := []struct {
+		tag string
+		dt  DataType
+		tr  Transform
+	}{
+		{"credit-card", DataTypeCreditCard, TransformRedact},
+		{"creditcard", DataTypeCreditCard, TransformRedact},
+		{"CreditCard,Partial", DataTypeCreditCard, TransformPartial},
+		{"api-key", DataTypeAPIKey, TransformRedact},
+		{"apikey,hash", DataTypeAPIKey, TransformHash},
+		{"password", DataTypePassword, TransformRedact},
+		{"ssn,TOKENIZE", DataTypeSSN, TransformTokenize},
+		{"secret,redact", DataTypeSecret, TransformRedact},
+	}
+	for _, tt := range tests {
+		dt, tr, err := parseTagValue(tt.tag)
+		if err != nil || dt != tt.dt || tr != tt.tr {
+			t.Errorf("tag %q: got (%v,%v,%v), want (%v,%v,nil)", tt.tag, dt, tr, err, tt.dt, tt.tr)
+		}
+	}
+}
