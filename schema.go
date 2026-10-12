@@ -78,11 +78,31 @@ func (s *Schema[T]) check() error {
 // Redact returns a masked copy of v. It never modifies v. On any error the
 // zero value of T is returned.
 func (s *Schema[T]) Redact(v T) (T, error) {
+	return s.apply(v, Policy{})
+}
+
+// Apply is Redact with policy rules raising the protection of tagged fields
+// (ADR-0028): per field, the most restrictive of the tag's transform and the
+// policy's rule for its data type wins, and Maskable always wins. It never
+// modifies v and returns the zero T on error. A policy that needs a key the
+// Masker lacks returns ErrInvalidSchema.
+func (s *Schema[T]) Apply(v T, policy Policy) (T, error) {
 	var zero T
 	if err := s.check(); err != nil {
 		return zero, err
 	}
-	result, err := s.masker.redact(v)
+	if err := policy.check(s.masker); err != nil {
+		return zero, err
+	}
+	return s.apply(v, policy)
+}
+
+func (s *Schema[T]) apply(v T, policy Policy) (T, error) {
+	var zero T
+	if err := s.check(); err != nil {
+		return zero, err
+	}
+	result, err := s.masker.redactWith(v, policy)
 	if err != nil {
 		return zero, err
 	}

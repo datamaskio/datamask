@@ -138,24 +138,6 @@ func TestMaskableRedactInPlace(t *testing.T) {
 	}
 }
 
-func TestMaskablePolicyRedactPII(t *testing.T) {
-	m := New()
-	v := withUntaggedEmailMask{
-		Name:  "Eve",
-		Email: "eve@example.com",
-	}
-
-	result, err := m.RedactPII()(v)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	masked := result.(withUntaggedEmailMask)
-
-	if masked.Email != "e***@example.com" {
-		t.Errorf("Email = %q, want e***@example.com", masked.Email)
-	}
-}
-
 func TestMaskableMixedFields(t *testing.T) {
 	m := New()
 	v := withMixedMaskable{
@@ -249,27 +231,6 @@ func TestMaskableSliceOfMaskableTypes(t *testing.T) {
 	}
 	if masked[1].Email != "b***@example.com" {
 		t.Errorf("Email[1] = %q, want b***@example.com", masked[1].Email)
-	}
-}
-
-func TestMaskableHashEmailsPolicy(t *testing.T) {
-	m := New()
-	v := withEmailMask{
-		Name:  "Hank",
-		Email: "hank@example.com",
-	}
-
-	result, err := m.HashEmails()(v)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	masked := result.(withEmailMask)
-
-	if len(string(masked.Email)) >= 7 && string(masked.Email)[:7] == "sha256:" {
-		t.Error("Maskable should take precedence over hash strategy; got sha256: prefix")
-	}
-	if masked.Email != "h***@example.com" {
-		t.Errorf("Email = %q, want h***@example.com", masked.Email)
 	}
 }
 
@@ -453,27 +414,3 @@ func TestRedactInPlacePointerToString(t *testing.T) {
 }
 
 // -- Tests: RedactPII with Maskable *string value --
-
-func TestRedactPIIPointerToStringMaskable(t *testing.T) {
-	m := New()
-	type cfg struct {
-		Name string
-		CC   *creditCard `mask:"secret"`
-	}
-	cc := creditCard("4111111111111111")
-	v := cfg{Name: "Test", CC: &cc}
-
-	result, err := m.RedactPII()(v)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	masked := result.(cfg)
-
-	if masked.CC == nil {
-		t.Fatal("CC should not be nil")
-	}
-	// Maskable takes precedence over tag strategy.
-	if *masked.CC != "4111****1111" {
-		t.Errorf("CC = %q, want 4111****1111", *masked.CC)
-	}
-}

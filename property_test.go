@@ -24,7 +24,17 @@ type propShape struct {
 	Arr   [2]*propShape
 	Inner propInner
 	Tok   *string `mask:"secret"`
+	// Named scalar Maskable types, in containers (regression for touches()).
+	Named propNamed
+	NList []propNamed
+	NMap  map[string]propNamed
+	NAny  any
 }
+
+// propNamed masks itself; its raw values contain "@" like every other leak.
+type propNamed string
+
+func (propNamed) Mask() (any, error) { return propNamed("***"), nil }
 
 type propInner struct {
 	Label string
@@ -47,7 +57,12 @@ func (g *propGen) mail() string {
 }
 
 func (g *propGen) shape(depth int) *propShape {
-	s := &propShape{Name: "plain", Mail: g.mail(), Inner: propInner{Label: "plain", Mail: g.mail()}}
+	s := &propShape{Name: "plain", Mail: g.mail(), Inner: propInner{Label: "plain", Mail: g.mail()}, Named: propNamed(g.mail())}
+	if g.r.Intn(2) == 0 {
+		s.NList = []propNamed{propNamed(g.mail()), propNamed(g.mail())}
+		s.NMap = map[string]propNamed{"k": propNamed(g.mail())}
+		s.NAny = propNamed(g.mail())
+	}
 	// Register s only once it is complete (see the defer): sharing is limited
 	// to finished nodes, so a node can never be reused as its own descendant.
 	defer func() { g.nodes = append(g.nodes, s) }()

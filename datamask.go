@@ -81,7 +81,8 @@ func Redact[T any](m *Masker, v T) (T, error) {
 // pointer reached again from inside itself is a cycle, while the same
 // pointer reached from two sibling branches (a diamond) is not.
 type walkState struct {
-	path map[uintptr]struct{}
+	policy Policy // rules that raise tag transforms (ADR-0028)
+	path   map[uintptr]struct{}
 	// maskErr is the first Maskable failure seen by RedactInPlace, which
 	// keeps masking the remaining fields before reporting it.
 	maskErr error
@@ -90,7 +91,12 @@ type walkState struct {
 // redact is the type-erased implementation. It handles structs, slices,
 // arrays, and pointers to them. Maps and other types return an error.
 func (m *Masker) redact(v any) (any, error) {
-	return m.redactVisited(v, &walkState{}, 0)
+	return m.redactWith(v, Policy{})
+}
+
+// redactWith is redact with policy rules applied to tagged fields.
+func (m *Masker) redactWith(v any, p Policy) (any, error) {
+	return m.redactVisited(v, &walkState{policy: p}, 0)
 }
 
 // exceedsDepth reports whether depth is past the configured limit.
@@ -106,6 +112,11 @@ func (m *Masker) redactVisited(v any, st *walkState, depth int) (any, error) {
 	rv := reflect.ValueOf(v)
 	if !rv.IsValid() {
 		return nil, fmt.Errorf("%w: nil value", ErrInvalidInput)
+	}
+	// A nil pointer has nothing to mask, and calling a value-receiver Mask()
+	// through it would panic.
+	if rv.Kind() == reflect.Pointer && rv.IsNil() {
+		return v, nil
 	}
 	// Maskable check: if the value implements Maskable, use Mask()
 	// instead of reflection-based walking.
@@ -284,10 +295,12 @@ func (m *Masker) redactStructVisited(v any, st *walkState, depth int) (any, erro
 				return
 			}
 			if fv.Kind() == reflect.String {
-				fv.SetString(m.transform(fv.String(), fm.Transform))
+				tr := resolveTransform(fm.Transform, st.policy, fm.DataType)
+				fv.SetString(m.transform(fv.String(), tr))
 			}
 			if fv.Kind() == reflect.Pointer && !fv.IsNil() && fv.Elem().Kind() == reflect.String {
-				newVal := m.transform(fv.Elem().String(), fm.Transform)
+				tr := resolveTransform(fm.Transform, st.policy, fm.DataType)
+				newVal := m.transform(fv.Elem().String(), tr)
 				newPtr := reflect.New(fv.Type().Elem())
 				newPtr.Elem().SetString(newVal)
 				fv.Set(newPtr)
@@ -346,12 +359,17 @@ func (m *Masker) redactStructVisited(v any, st *walkState, depth int) (any, erro
 // anything: t (or something reachable from it) has a mask tag, is Maskable,
 // or is interface-typed (dynamic contents). Results are cached per Masker.
 func (m *Masker) touches(t reflect.Type) (bool, error) {
-	switch t.Kind() {
-	case reflect.Bool, reflect.String, reflect.Int, reflect.Int8, reflect.Int16,
-		reflect.Int32, reflect.Int64, reflect.Uint, reflect.Uint8, reflect.Uint16,
-		reflect.Uint32, reflect.Uint64, reflect.Uintptr, reflect.Float32,
-		reflect.Float64, reflect.Complex64, reflect.Complex128:
-		return false, nil
+	// Unnamed scalar types can have no methods, so they have nothing to mask.
+	// Named scalars (type CardNumber string) may be Maskable and fall through
+	// to the cached check below.
+	if t.PkgPath() == "" {
+		switch t.Kind() {
+		case reflect.Bool, reflect.String, reflect.Int, reflect.Int8, reflect.Int16,
+			reflect.Int32, reflect.Int64, reflect.Uint, reflect.Uint8, reflect.Uint16,
+			reflect.Uint32, reflect.Uint64, reflect.Uintptr, reflect.Float32,
+			reflect.Float64, reflect.Complex64, reflect.Complex128:
+			return false, nil
+		}
 	}
 	if v, ok := m.touched.Load(t); ok {
 		return v.(bool), nil
@@ -601,141 +619,25 @@ func (m *Masker) inPlaceElem(ev reflect.Value, st *walkState, depth int) error {
 	return m.inPlaceValue(ev, st, depth)
 }
 
-// Apply applies a custom policy to v and returns the result.
-// Apply uses Go generics so the caller gets back T:
+// Apply masks v like Redact, with the rules of policy raising the protection
+// of tagged fields. It never modifies v. On any error the zero T is returned.
 //
 //	masked, err := datamask.Apply(masker, user, datamask.Compose(
 //	    masker.RedactPII(),
 //	    masker.HashEmails(),
 //	))
 func Apply[T any](m *Masker, v T, policy Policy) (T, error) {
-	var zero T
 	if err := m.check(); err != nil {
+		var zero T
 		return zero, err
 	}
-	if policy == nil {
-		return zero, fmt.Errorf("%w: nil policy", ErrInvalidInput)
-	}
-	result, err := policy(v)
+	plan, err := m.compile(reflect.TypeFor[T]())
 	if err != nil {
+		var zero T
 		return zero, err
 	}
-	out, ok := result.(T)
-	if !ok {
-		return zero, fmt.Errorf("%w: policy returned %T, want %T", ErrInvalidInput, result, zero)
-	}
-	return out, nil
-}
-
-// RedactPII returns a Policy that redacts all mask-tagged fields using the
-// Masker's configuration.
-func (m *Masker) RedactPII() Policy {
-	return func(v any) (any, error) {
-		if err := m.check(); err != nil {
-			return nil, err
-		}
-		t := reflect.TypeOf(v)
-		if t.Kind() != reflect.Struct {
-			return v, nil
-		}
-		cpPtr := shallowCopy(v)
-		rv := reflect.ValueOf(cpPtr).Elem()
-
-		// Tag-optional: apply Maskable to all fields.
-		if err := applyMaskableFields(rv); err != nil {
-			return nil, err
-		}
-
-		meta, err := m.getOrParseMeta(t)
-		if err != nil {
-			return nil, err
-		}
-		var maskErr error
-		if len(meta.Fields) > 0 {
-			walkErr := reflectx.Walk(cpPtr, meta.Fields, func(fv reflect.Value, fm reflectx.FieldMeta) {
-				// Maskable takes precedence over tag-based transform.
-				if ok, err := maskField(fv); ok {
-					if err != nil && maskErr == nil {
-						maskErr = err
-					}
-					return
-				}
-				if fv.Kind() == reflect.String {
-					fv.SetString(m.transform(fv.String(), fm.Transform))
-				}
-				if fv.Kind() == reflect.Pointer && !fv.IsNil() && fv.Elem().Kind() == reflect.String {
-					newVal := m.transform(fv.Elem().String(), fm.Transform)
-					newPtr := reflect.New(fv.Type().Elem())
-					newPtr.Elem().SetString(newVal)
-					fv.Set(newPtr)
-				}
-			})
-			if walkErr != nil {
-				return nil, fmt.Errorf("%w: %v", ErrUnsupportedType, walkErr)
-			}
-		}
-		if maskErr != nil {
-			return nil, maskErr
-		}
-		return rv.Interface(), nil
-	}
-}
-
-// HashEmails returns a Policy that hashes fields whose tag transform is hash (e.g. mask:"email,hash")
-// using SHA-256. Other mask-tagged fields are left unchanged.
-func (m *Masker) HashEmails() Policy {
-	return func(v any) (any, error) {
-		if err := m.check(); err != nil {
-			return nil, err
-		}
-		t := reflect.TypeOf(v)
-		if t.Kind() != reflect.Struct {
-			return v, nil
-		}
-		cpPtr := shallowCopy(v)
-		rv := reflect.ValueOf(cpPtr).Elem()
-
-		// Tag-optional: apply Maskable to all fields.
-		if err := applyMaskableFields(rv); err != nil {
-			return nil, err
-		}
-
-		meta, err := m.getOrParseMeta(t)
-		if err != nil {
-			return nil, err
-		}
-		var maskErr error
-		if len(meta.Fields) > 0 {
-			walkErr := reflectx.Walk(cpPtr, meta.Fields, func(fv reflect.Value, fm reflectx.FieldMeta) {
-				// Maskable takes precedence over hash transform.
-				if ok, err := maskField(fv); ok {
-					if err != nil && maskErr == nil {
-						maskErr = err
-					}
-					return
-				}
-				if fm.Transform != TransformHash {
-					return
-				}
-				if fv.Kind() == reflect.String {
-					fv.SetString(Hash(fv.String()))
-				}
-				if fv.Kind() == reflect.Pointer && !fv.IsNil() && fv.Elem().Kind() == reflect.String {
-					newVal := Hash(fv.Elem().String())
-					newPtr := reflect.New(fv.Type().Elem())
-					newPtr.Elem().SetString(newVal)
-					fv.Set(newPtr)
-				}
-			})
-			if walkErr != nil {
-				return nil, fmt.Errorf("%w: %v", ErrUnsupportedType, walkErr)
-			}
-		}
-		if maskErr != nil {
-			return nil, maskErr
-		}
-		return rv.Interface(), nil
-	}
+	s := Schema[T]{masker: m, plan: plan}
+	return s.Apply(v, policy)
 }
 
 // getOrParseMeta returns the field metadata for struct type t from the
@@ -768,19 +670,6 @@ func (m *Masker) transform(s string, tr Transform) string {
 	}
 }
 
-// shallowCopy returns a pointer to a shallow copy of v (v must be a struct
-// value, not a pointer). The copy's fields share backing memory for pointer,
-// map, and slice types — only the top-level struct is copied.
-//
-// The returned pointer is suitable for passing to reflectx.Walk, which can
-// then set fields on the copy.
-func shallowCopy(v any) any {
-	rv := reflect.ValueOf(v)
-	cpPtr := reflect.New(rv.Type())
-	cpPtr.Elem().Set(rv)
-	return cpPtr.Interface()
-}
-
 // checkMaskResult calls Mask() and verifies the result has type want
 // (dereferencing a returned pointer for pointer-receiver types). Any
 // failure wraps ErrMaskFailed so callers never see an unmasked value.
@@ -792,6 +681,14 @@ func checkMaskResult(want reflect.Type, mk Maskable) (any, error) {
 	rv := reflect.ValueOf(result)
 	if rv.IsValid() && rv.Kind() == reflect.Pointer && want.Kind() != reflect.Pointer && !rv.IsNil() {
 		rv = rv.Elem()
+		result = rv.Interface()
+	}
+	// A *T whose T.Mask() returns a T value: store a pointer to a new copy,
+	// never the original target (same rule as maskField).
+	if rv.IsValid() && want.Kind() == reflect.Pointer && rv.Type() == want.Elem() {
+		np := reflect.New(want.Elem())
+		np.Elem().Set(rv)
+		rv = np
 		result = rv.Interface()
 	}
 	if !rv.IsValid() || rv.Type() != want {

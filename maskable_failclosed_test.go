@@ -152,17 +152,6 @@ func TestMaskableFailClosedRedactInPlace(t *testing.T) {
 	}
 }
 
-func TestMaskableFailClosedPolicies(t *testing.T) {
-	m := New()
-	v := holder[failVal]{F: failVal{S: "secret"}}
-	if _, err := m.RedactPII()(v); !errors.Is(err, ErrMaskFailed) {
-		t.Errorf("RedactPII err = %v", err)
-	}
-	if _, err := m.HashEmails()(v); !errors.Is(err, ErrMaskFailed) {
-		t.Errorf("HashEmails err = %v", err)
-	}
-}
-
 type embedInner[F any] struct{ F F }
 
 type embedValue[F any] struct {

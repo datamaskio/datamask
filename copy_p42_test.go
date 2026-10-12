@@ -379,3 +379,122 @@ func TestSchemaRedactMapAndInterfaceTypes(t *testing.T) {
 		t.Errorf("map[string]any: (%+v, %v)", g2, err)
 	}
 }
+
+// -- named scalar Maskable types (regression: touches() treated them as plain scalars) --
+
+type scalarMask string
+
+func (s scalarMask) Mask() (any, error) { return scalarMask("***"), nil }
+
+type scalarFail string
+
+func (scalarFail) Mask() (any, error) { return nil, errBoom }
+
+type scalarHolder struct {
+	Direct scalarMask
+	Ptr    *scalarMask
+	Slice  []scalarMask
+	Arr    [2]scalarMask
+	Map    map[string]scalarMask
+	PMap   map[string]*scalarMask
+	Any    any
+	List   []any
+}
+
+func scalarFixture() scalarHolder {
+	p, q := scalarMask("secret"), scalarMask("secret")
+	return scalarHolder{
+		Direct: "secret", Ptr: &p,
+		Slice: []scalarMask{"secret", "secret"},
+		Arr:   [2]scalarMask{"secret", "secret"},
+		Map:   map[string]scalarMask{"k": "secret"},
+		PMap:  map[string]*scalarMask{"k": &q, "nil": nil},
+		Any:   scalarMask("secret"),
+		List:  []any{scalarMask("secret"), "plain"},
+	}
+}
+
+func checkScalarMasked(t *testing.T, h scalarHolder) {
+	t.Helper()
+	if h.Direct != "***" || *h.Ptr != "***" || h.Slice[1] != "***" || h.Arr[1] != "***" ||
+		h.Map["k"] != "***" || *h.PMap["k"] != "***" || h.PMap["nil"] != nil ||
+		h.Any.(scalarMask) != "***" || h.List[0].(scalarMask) != "***" || h.List[1] != "plain" {
+		t.Errorf("not fully masked: %+v", h)
+	}
+}
+
+func TestNamedScalarMaskableInContainers(t *testing.T) {
+	m := New()
+	in := scalarFixture()
+	got, err := Redact(m, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkScalarMasked(t, got)
+	if in.Slice[0] != "secret" || in.Map["k"] != "secret" || *in.Ptr != "secret" {
+		t.Error("input mutated")
+	}
+
+	h := scalarFixture()
+	if err := m.RedactInPlace(&h); err != nil {
+		t.Fatal(err)
+	}
+	checkScalarMasked(t, h)
+
+	// Top-level containers.
+	s, err := Redact(m, []scalarMask{"a", "b"})
+	if err != nil || s[0] != "***" || s[1] != "***" {
+		t.Errorf("top-level slice: (%v, %v)", s, err)
+	}
+	mp, err := Redact(m, map[string]scalarMask{"k": "a"})
+	if err != nil || mp["k"] != "***" {
+		t.Errorf("top-level map: (%v, %v)", mp, err)
+	}
+	arr, err := Redact(m, [1]scalarMask{"a"})
+	if err != nil || arr[0] != "***" {
+		t.Errorf("top-level array: (%v, %v)", arr, err)
+	}
+	// And through a policy.
+	pol, err := Apply(m, scalarFixture(), m.RedactPII())
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkScalarMasked(t, pol)
+}
+
+func TestNamedScalarMaskableFailsClosed(t *testing.T) {
+	m := New()
+	type holder struct {
+		Slice []scalarFail
+		Map   map[string]scalarFail
+	}
+	for name, in := range map[string]holder{
+		"slice": {Slice: []scalarFail{"x"}},
+		"map":   {Map: map[string]scalarFail{"k": "x"}},
+	} {
+		got, err := Redact(m, in)
+		checkFailClosed(t, err, true)
+		if got.Slice != nil || got.Map != nil {
+			t.Errorf("%s: got %+v alongside an error", name, got)
+		}
+		in2 := in
+		checkFailClosed(t, m.RedactInPlace(&in2), true)
+	}
+}
+
+func TestPlainNamedScalarsStillShared(t *testing.T) {
+	// A named scalar that is NOT Maskable has nothing to mask: share, don't clone.
+	type userID string
+	type holder struct {
+		IDs []userID
+		M   map[string]userID
+	}
+	in := holder{IDs: []userID{"a"}, M: map[string]userID{"k": "v"}}
+	got, err := Redact(New(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if &got.IDs[0] != &in.IDs[0] || reflect.ValueOf(got.M).Pointer() != reflect.ValueOf(in.M).Pointer() {
+		t.Error("containers of plain named scalars must be shared")
+	}
+}

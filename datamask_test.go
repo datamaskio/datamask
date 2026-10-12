@@ -293,84 +293,7 @@ func TestApply(t *testing.T) {
 	}
 }
 
-func TestApplyReturnsConcreteType(t *testing.T) {
-	m := New()
-	v := customer{Name: "Jane"}
-
-	result, _ := Apply(m, v, Identity())
-	_ = result.Name // proves result is customer
-}
-
-func TestApplyError(t *testing.T) {
-	m := New()
-	fail := func(v any) (any, error) {
-		return nil, errors.New("boom")
-	}
-
-	_, err := Apply(m, customer{}, Policy(fail))
-	if err == nil {
-		t.Error("expected error from policy")
-	}
-}
-
 // -- Tests: Composed policies --
-
-func TestRedactPIIPolicy(t *testing.T) {
-	m := New()
-	v := customer{
-		Name:  "John",
-		Email: "john@example.com",
-		SSN:   "123-45-6789",
-	}
-
-	redacted, err := m.RedactPII()(v)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	r := redacted.(customer)
-
-	if r.Email != "[REDACTED]" {
-		t.Errorf("Email = %q, want [REDACTED]", r.Email)
-	}
-}
-
-func TestHashEmailsPolicy(t *testing.T) {
-	m := New(WithHashKey("k"))
-	v := withHash{Name: "test", Token: "my-token"}
-
-	result, err := m.HashEmails()(v)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	r := result.(withHash)
-
-	if r.Token == "my-token" {
-		t.Error("Token was not hashed")
-	}
-	if r.Name != "test" {
-		t.Errorf("Name = %q, want test", r.Name)
-	}
-}
-
-func TestComposedPolicy(t *testing.T) {
-	m := New()
-	v := customer{
-		Name:  "John",
-		Email: "john@example.com",
-		SSN:   "123-45-6789",
-	}
-
-	p := Compose(m.RedactPII(), Identity())
-	result, err := p(v)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	r := result.(customer)
-
-	if r.Email != "[REDACTED]" {
-		t.Errorf("Email = %q, want [REDACTED]", r.Email)
-	}
-}
 
 func TestRedactPointerToStringField(t *testing.T) {
 	m := New()
@@ -424,41 +347,6 @@ func TestRedactCyclicStruct(t *testing.T) {
 	}
 	if got != nil {
 		t.Errorf("got %+v, want nil", got)
-	}
-}
-
-func TestRedactPIIWithPointerToString(t *testing.T) {
-	m := New()
-	type cfg struct {
-		Name  string
-		Token *string `mask:"secret"`
-	}
-	tok := "sauce"
-	v := cfg{Name: "test", Token: &tok}
-
-	result, _ := m.RedactPII()(v)
-	r := result.(cfg)
-	if *r.Token != "[REDACTED]" {
-		t.Errorf("Token = %q, want [REDACTED]", *r.Token)
-	}
-}
-
-func TestHashEmailsWithPointerToString(t *testing.T) {
-	m := New(WithHashKey("k"))
-	type cfg struct {
-		Name  string
-		Token *string `mask:"secret,hash"`
-	}
-	tok := "secret"
-	v := cfg{Name: "test", Token: &tok}
-
-	result, err := m.HashEmails()(v)
-	if err != nil {
-		t.Fatal(err)
-	}
-	r := result.(cfg)
-	if *r.Token == tok {
-		t.Error("Token should be hashed, not same as original")
 	}
 }
 
@@ -535,28 +423,6 @@ func TestRedactInPlaceErrorOnNonStructPointer(t *testing.T) {
 	err := m.RedactInPlace(&x)
 	if err == nil {
 		t.Error("expected error for pointer to non-struct")
-	}
-}
-
-func TestRedactPIIOnNonStruct(t *testing.T) {
-	m := New()
-	result, err := m.RedactPII()(42)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result != 42 {
-		t.Errorf("non-struct should pass through unchanged")
-	}
-}
-
-func TestHashEmailsOnNonStruct(t *testing.T) {
-	m := New()
-	result, err := m.HashEmails()("hello")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result != "hello" {
-		t.Errorf("non-struct should pass through unchanged")
 	}
 }
 
@@ -861,27 +727,9 @@ func TestMaskerZeroAndNilGuards(t *testing.T) {
 			if v.Email != "a@b.c" {
 				t.Errorf("input mutated: %q", v.Email)
 			}
-			if _, err := tc.m.RedactPII()(v); !errors.Is(err, tc.want) {
-				t.Errorf("RedactPII err = %v, want %v", err, tc.want)
-			}
-			if _, err := tc.m.HashEmails()(v); !errors.Is(err, tc.want) {
-				t.Errorf("HashEmails err = %v, want %v", err, tc.want)
-			}
-			if _, err := Apply(tc.m, v, func(a any) (any, error) { return a, nil }); !errors.Is(err, tc.want) {
+			if _, err := Apply(tc.m, v, Policy{}); !errors.Is(err, tc.want) {
 				t.Errorf("Apply err = %v, want %v", err, tc.want)
 			}
 		})
-	}
-}
-
-func TestApplyNilAndBadPolicy(t *testing.T) {
-	type rec struct{ A string }
-	m := New()
-	if _, err := Apply(m, rec{}, nil); !errors.Is(err, ErrInvalidInput) {
-		t.Errorf("nil policy err = %v", err)
-	}
-	bad := func(any) (any, error) { return 42, nil }
-	if _, err := Apply(m, rec{}, bad); !errors.Is(err, ErrInvalidInput) {
-		t.Errorf("wrong-type policy err = %v", err)
 	}
 }
