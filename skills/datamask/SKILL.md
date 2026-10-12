@@ -41,8 +41,8 @@ type Customer struct {
     Email string `mask:"email"`   // → [REDACTED]
     Phone string `mask:"phone"`   // → [REDACTED]
     SSN   string `mask:"secret"`  // → [REDACTED]
-    Alias string `mask:"hash"`    // → sha256:abc...
-    Card  string `mask:"partial"` // → ****-****-****-1234
+    Alias string `mask:"secret,hash"`    // → sha256:abc...
+    Card  string `mask:"credit-card,partial"` // → ****-****-****-1234
 }
 ```
 

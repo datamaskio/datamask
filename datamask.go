@@ -11,7 +11,7 @@ import (
 // across goroutines. A zero-value Masker is not usable; always use New.
 type Masker struct {
 	cfg   Config
-	cache *Cache
+	cache *reflectx.Cache
 }
 
 // New creates a Masker with the given options. A Masker is safe for
@@ -21,7 +21,7 @@ func New(opts ...Option) *Masker {
 		cfg: Config{
 			DetectSecrets: true,
 		},
-		cache: NewCache(),
+		cache: newCache(),
 	}
 	for _, o := range opts {
 		o(&m.cfg)
@@ -58,7 +58,7 @@ func (m *Masker) redactVisited(v any, visited map[uintptr]bool) (any, error) {
 	// Maskable check: if the value implements Maskable, use Mask()
 	// instead of reflection-based walking.
 	if maskable, ok := v.(Maskable); ok {
-		return maskable.Mask(), nil
+		return maskable.Mask()
 	}
 
 	rv := reflect.ValueOf(v)
@@ -67,7 +67,10 @@ func (m *Masker) redactVisited(v any, visited map[uintptr]bool) (any, error) {
 	if rv.Kind() != reflect.Pointer && reflect.PointerTo(rv.Type()).Implements(typeOfMaskable) {
 		newPtr := reflect.New(rv.Type())
 		newPtr.Elem().Set(rv)
-		result := newPtr.Interface().(Maskable).Mask()
+		result, err := newPtr.Interface().(Maskable).Mask()
+		if err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrMaskFailed, err)
+		}
 		if rResult := reflect.ValueOf(result); rResult.Kind() == reflect.Pointer {
 			return rResult.Elem().Interface(), nil
 		}
@@ -131,7 +134,10 @@ func (m *Masker) redactVisited(v any, visited map[uintptr]bool) (any, error) {
 
 func (m *Masker) redactStructVisited(v any, visited map[uintptr]bool) (any, error) {
 	t := reflect.TypeOf(v)
-	meta := m.getOrParseMeta(t)
+	meta, err := m.getOrParseMeta(t)
+	if err != nil {
+		return nil, err
+	}
 
 	cpPtr := reflect.New(t)
 	cpPtr.Elem().Set(reflect.ValueOf(v))
@@ -141,19 +147,19 @@ func (m *Masker) redactStructVisited(v any, visited map[uintptr]bool) (any, erro
 	applyMaskableFields(cpPtr.Elem())
 
 	// Pass 1: apply mask-tag transforms to tagged fields.
-	// Maskable takes precedence over tag strategy.
+	// Maskable takes precedence over tag transform.
 	if len(meta.Fields) > 0 {
 		reflectx.Walk(cpPtr.Interface(), meta.Fields, func(fv reflect.Value, fm reflectx.FieldMeta) {
-			// Maskable takes precedence over tag-based strategy.
-			if result, ok := callMaskOnField(fv); ok {
+			// Maskable takes precedence over tag-based transform.
+			if result, err, ok := callMaskOnField(fv); ok && err == nil && result != nil {
 				fv.Set(reflect.ValueOf(result))
 				return
 			}
 			if fv.Kind() == reflect.String {
-				fv.SetString(m.transform(fv.String(), fm.Strategy))
+				fv.SetString(m.transform(fv.String(), fm.Transform))
 			}
 			if fv.Kind() == reflect.Pointer && !fv.IsNil() && fv.Elem().Kind() == reflect.String {
-				newVal := m.transform(fv.Elem().String(), fm.Strategy)
+				newVal := m.transform(fv.Elem().String(), fm.Transform)
 				newPtr := reflect.New(fv.Type().Elem())
 				newPtr.Elem().SetString(newVal)
 				fv.Set(newPtr)
@@ -204,38 +210,48 @@ func (m *Masker) RedactAny(v any) (any, error) {
 // RedactInPlace mutates the struct pointed to by v in-place. Every
 // mask-tagged field is replaced with its redaction placeholder.
 //
-// RedactInPlace panics if v is not a non-nil pointer to a struct.
+// RedactInPlace returns ErrInvalidInput if v is not a non-nil pointer to
+// a struct, or ErrUnsupportedType if it's a pointer to a non-struct type.
 // Use this for high-throughput code paths where allocations must be
 // minimized.
 func (m *Masker) RedactInPlace(v any) error {
+	if m == nil {
+		return ErrNilReceiver
+	}
 	rv := reflect.ValueOf(v)
-	if rv.Kind() != reflect.Pointer || rv.IsNil() {
-		panic("datamask: RedactInPlace requires a non-nil pointer to a struct")
+	if rv.Kind() != reflect.Pointer {
+		return fmt.Errorf("%w: expected pointer, got %v", ErrInvalidInput, rv.Kind())
+	}
+	if rv.IsNil() {
+		return fmt.Errorf("%w: nil pointer", ErrInvalidInput)
 	}
 	rv = rv.Elem()
 	if rv.Kind() != reflect.Struct {
-		panic("datamask: RedactInPlace requires a pointer to a struct")
+		return fmt.Errorf("%w: expected pointer to struct, got pointer to %v", ErrUnsupportedType, rv.Kind())
 	}
 
 	// Tag-optional: apply Maskable to all fields.
 	applyMaskableFields(rv)
 
-	meta := m.getOrParseMeta(rv.Type())
+	meta, err := m.getOrParseMeta(rv.Type())
+	if err != nil {
+		return err
+	}
 	if len(meta.Fields) == 0 {
 		return nil
 	}
 
 	reflectx.Walk(v, meta.Fields, func(fv reflect.Value, fm reflectx.FieldMeta) {
-		// Maskable takes precedence over tag-based strategy.
-		if result, ok := callMaskOnField(fv); ok {
+		// Maskable takes precedence over tag-based transform.
+		if result, err, ok := callMaskOnField(fv); ok && err == nil && result != nil {
 			fv.Set(reflect.ValueOf(result))
 			return
 		}
 		if fv.Kind() == reflect.String {
-			fv.SetString(m.transform(fv.String(), fm.Strategy))
+			fv.SetString(m.transform(fv.String(), fm.Transform))
 		}
 		if fv.Kind() == reflect.Pointer && !fv.IsNil() && fv.Elem().Kind() == reflect.String {
-			newVal := m.transform(fv.Elem().String(), fm.Strategy)
+			newVal := m.transform(fv.Elem().String(), fm.Transform)
 			newPtr := reflect.New(fv.Type().Elem())
 			newPtr.Elem().SetString(newVal)
 			fv.Set(newPtr)
@@ -275,19 +291,22 @@ func (m *Masker) RedactPII() Policy {
 		// Tag-optional: apply Maskable to all fields.
 		applyMaskableFields(rv)
 
-		meta := m.getOrParseMeta(t)
+		meta, err := m.getOrParseMeta(t)
+		if err != nil {
+			return nil, err
+		}
 		if len(meta.Fields) > 0 {
 			reflectx.Walk(cpPtr, meta.Fields, func(fv reflect.Value, fm reflectx.FieldMeta) {
-				// Maskable takes precedence over tag-based strategy.
-				if result, ok := callMaskOnField(fv); ok {
+				// Maskable takes precedence over tag-based transform.
+				if result, err, ok := callMaskOnField(fv); ok && err == nil && result != nil {
 					fv.Set(reflect.ValueOf(result))
 					return
 				}
 				if fv.Kind() == reflect.String {
-					fv.SetString(m.transform(fv.String(), fm.Strategy))
+					fv.SetString(m.transform(fv.String(), fm.Transform))
 				}
 				if fv.Kind() == reflect.Pointer && !fv.IsNil() && fv.Elem().Kind() == reflect.String {
-					newVal := m.transform(fv.Elem().String(), fm.Strategy)
+					newVal := m.transform(fv.Elem().String(), fm.Transform)
 					newPtr := reflect.New(fv.Type().Elem())
 					newPtr.Elem().SetString(newVal)
 					fv.Set(newPtr)
@@ -298,7 +317,7 @@ func (m *Masker) RedactPII() Policy {
 	}
 }
 
-// HashEmails returns a Policy that hashes fields tagged mask:"hash"
+// HashEmails returns a Policy that hashes fields whose tag transform is hash (e.g. mask:"email,hash")
 // using SHA-256. Other mask-tagged fields are left unchanged.
 func (m *Masker) HashEmails() Policy {
 	return func(v any) (any, error) {
@@ -312,15 +331,18 @@ func (m *Masker) HashEmails() Policy {
 		// Tag-optional: apply Maskable to all fields.
 		applyMaskableFields(rv)
 
-		meta := m.getOrParseMeta(t)
+		meta, err := m.getOrParseMeta(t)
+		if err != nil {
+			return nil, err
+		}
 		if len(meta.Fields) > 0 {
 			reflectx.Walk(cpPtr, meta.Fields, func(fv reflect.Value, fm reflectx.FieldMeta) {
-				// Maskable takes precedence over hash strategy.
-				if result, ok := callMaskOnField(fv); ok {
+				// Maskable takes precedence over hash transform.
+				if result, err, ok := callMaskOnField(fv); ok && err == nil && result != nil {
 					fv.Set(reflect.ValueOf(result))
 					return
 				}
-				if fm.Strategy != HashStrategy {
+				if fm.Transform != TransformHash {
 					return
 				}
 				if fv.Kind() == reflect.String {
@@ -340,29 +362,32 @@ func (m *Masker) HashEmails() Policy {
 
 // getOrParseMeta returns the cached TypeMeta for t, parsing and caching
 // it if this is the first lookup.
-func (m *Masker) getOrParseMeta(t reflect.Type) *TypeMeta {
+func (m *Masker) getOrParseMeta(t reflect.Type) (*reflectx.TypeMeta, error) {
 	if meta, ok := m.cache.Load(t); ok {
-		return meta
+		return meta, nil
 	}
-	meta := parseTags(t)
+	meta, err := parseTags(t)
+	if err != nil {
+		return nil, err
+	}
 	m.cache.Store(t, meta)
-	return meta
+	return meta, nil
 }
 
-// transform applies the strategy to s using the Masker's configuration.
-func (m *Masker) transform(s string, st Strategy) string {
-	switch st {
-	case HashStrategy:
+// transform applies the transform to s using the Masker's configuration.
+func (m *Masker) transform(s string, tr Transform) string {
+	switch tr {
+	case TransformHash:
 		if m.cfg.HashKey != "" {
 			return Tokenize(s, m.cfg.HashKey)
 		}
 		return Hash(s)
-	case TokenizeStrategy:
+	case TransformTokenize:
 		if m.cfg.tokenizeMAC != nil {
 			return TokenizeWithMAC(s, m.cfg.tokenizeMAC)
 		}
 		return Tokenize(s, m.cfg.TokenizeKey)
-	case PartialStrategy:
+	case TransformPartial:
 		return Partial(s)
 	default:
 		return RedactValue(s)

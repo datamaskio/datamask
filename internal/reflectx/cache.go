@@ -1,21 +1,11 @@
 // Package reflectx provides reflection helpers for struct field walking
 // and type-metadata caching. It is an internal package — only imported by
-// pkg/datamask and pkg/secret within the datamask module.
+// the datamask package within the datamask module.
 package reflectx
 
 import (
 	"reflect"
 	"sync"
-)
-
-// Strategy controls how a masked field is transformed.
-type Strategy int
-
-const (
-	RedactStrategy   Strategy = iota // Replace with placeholder (e.g. "[EMAIL]")
-	HashStrategy                     // Replace with SHA-256 hash
-	TokenizeStrategy                 // Replace with stable pseudonym
-	PartialStrategy                  // Partially mask (e.g. "j***@example.com")
 )
 
 // TypeMeta holds precomputed field metadata for a struct type.
@@ -27,8 +17,9 @@ type TypeMeta struct {
 // FieldMeta describes one maskable field in a struct.
 // Index is the reflect field-index path used with reflect.Value.FieldByIndex.
 type FieldMeta struct {
-	Index    []int
-	Strategy Strategy
+	Index     []int
+	DataType  DataType
+	Transform Transform
 }
 
 // Cache is a thread-safe, write-once-read-many store for

@@ -21,7 +21,7 @@ func TestCacheStoreAndLoad(t *testing.T) {
 	c := &Cache{}
 	typ := reflect.TypeOf(struct{}{})
 	want := &TypeMeta{
-		Fields: []FieldMeta{{Index: []int{0}, Strategy: RedactStrategy}},
+		Fields: []FieldMeta{{Index: []int{0}, Transform: TransformRedact}},
 	}
 
 	c.Store(typ, want)
@@ -39,8 +39,8 @@ func TestCacheDifferentTypes(t *testing.T) {
 	c := &Cache{}
 	typeA := reflect.TypeOf(struct{ A string }{})
 	typeB := reflect.TypeOf(struct{ B int }{})
-	metaA := &TypeMeta{Fields: []FieldMeta{{Index: []int{0}, Strategy: RedactStrategy}}}
-	metaB := &TypeMeta{Fields: []FieldMeta{{Index: []int{0}, Strategy: RedactStrategy}}}
+	metaA := &TypeMeta{Fields: []FieldMeta{{Index: []int{0}, Transform: TransformRedact}}}
+	metaB := &TypeMeta{Fields: []FieldMeta{{Index: []int{0}, Transform: TransformRedact}}}
 
 	c.Store(typeA, metaA)
 	c.Store(typeB, metaB)
@@ -77,7 +77,7 @@ func TestCacheConcurrent(t *testing.T) {
 func BenchmarkCacheLoad(b *testing.B) {
 	c := &Cache{}
 	typ := reflect.TypeOf(struct{}{})
-	c.Store(typ, &TypeMeta{Fields: []FieldMeta{{Index: []int{0}, Strategy: RedactStrategy}}})
+	c.Store(typ, &TypeMeta{Fields: []FieldMeta{{Index: []int{0}, Transform: TransformRedact}}})
 
 	b.ResetTimer()
 	for b.Loop() {

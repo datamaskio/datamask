@@ -7,74 +7,125 @@ import (
 	"github.com/datamaskio/datamask/internal/reflectx"
 )
 
-// Strategy is a type alias for reflectx.Strategy. It controls how a masked
-// field is transformed.
-type Strategy = reflectx.Strategy
-
-// Strategy constants re-exported from the internal reflection package.
-const (
-	RedactStrategy   = reflectx.RedactStrategy
-	HashStrategy     = reflectx.HashStrategy
-	TokenizeStrategy = reflectx.TokenizeStrategy
-	PartialStrategy  = reflectx.PartialStrategy
-)
-
 // MaskTag is the struct tag key used to mark sensitive fields.
 const MaskTag = "mask"
 
-// TypeMeta is a type alias for the cached struct metadata.
-type TypeMeta = reflectx.TypeMeta
-
-// FieldMeta is a type alias for per-field masking metadata.
-type FieldMeta = reflectx.FieldMeta
-
-// Cache is a type alias for the thread-safe type metadata cache.
-type Cache = reflectx.Cache
-
-// NewCache returns a ready-to-use Cache.
-func NewCache() *Cache {
-	return &Cache{}
+// newCache returns a ready-to-use type metadata cache.
+func newCache() *reflectx.Cache {
+	return &reflectx.Cache{}
 }
 
 // parseTags walks the struct type t and returns metadata for every field
 // tagged with mask:"...". Embedded structs are walked recursively;
 // pointer fields are followed (dereferenced).
 //
-// Fields tagged mask:"-" are excluded. Unknown tag values default to
-// RedactStrategy. Tag values are case-insensitive.
-func parseTags(t reflect.Type) *TypeMeta {
-	meta := &TypeMeta{}
+// Tag parsing rules (ADR-0023, clean break — no transform-only tags):
+//
+//  1. "-" → skip field
+//  2. "<dataType>" → transform defaults to redact
+//  3. "<dataType>,<transform>[,opts...]" → split on ","; whitespace trimmed;
+//     key=value suffixes on the transform token are ignored
+//  4. Unknown or empty dataType (including v0.1 "hash", "tokenize",
+//     "partial") → ErrUnknownDataType
+//  5. Unknown or empty transform → ErrUnknownTransform
+//
+// Fields tagged mask:"-" are excluded.
+func parseTags(t reflect.Type) (*reflectx.TypeMeta, error) {
+	meta := &reflectx.TypeMeta{}
+	var firstErr error
 	discoverFields(t, nil, func(index []int, tag string) {
-		strategy := strategyFromTag(tag)
-		if strategy < 0 {
-			return // mask:"-" → skip
+		dt, tr, err := parseTagValue(tag)
+		if err != nil && firstErr == nil {
+			firstErr = err
+			return
 		}
 		// Copy the index slice since the walk reuses the backing array.
 		idx := make([]int, len(index))
 		copy(idx, index)
-		meta.Fields = append(meta.Fields, FieldMeta{
-			Index:    idx,
-			Strategy: strategy,
+		meta.Fields = append(meta.Fields, reflectx.FieldMeta{
+			Index:     idx,
+			DataType:  dt,
+			Transform: tr,
 		})
 	})
-	return meta
+	return meta, firstErr
 }
 
-// strategyFromTag maps a tag value to a Strategy. Returns -1 for mask:"-"
-// (meaning skip the field).
-func strategyFromTag(tag string) Strategy {
-	switch strings.ToLower(tag) {
-	case "-":
-		return -1
-	case "hash":
-		return HashStrategy
-	case "tokenize":
-		return TokenizeStrategy
-	case "partial":
-		return PartialStrategy
-	default:
-		return RedactStrategy
+// parseTagValue parses a mask tag value into a DataType and Transform.
+// Callers filter out mask:"-" before calling.
+func parseTagValue(tag string) (reflectx.DataType, reflectx.Transform, error) {
+	dtStr, rest, hasTransform := strings.Cut(tag, ",")
+	dt := dataTypeFromString(strings.TrimSpace(dtStr))
+	if dt == reflectx.DataTypeUnknown {
+		return reflectx.DataTypeUnknown, 0, ErrUnknownDataType
 	}
+	if !hasTransform {
+		return dt, reflectx.TransformRedact, nil
+	}
+
+	// Only the first token after the data type is the transform; the rest
+	// are options and are ignored.
+	trStr, _, _ := strings.Cut(rest, ",")
+	trStr, _, _ = strings.Cut(trStr, "=")
+	trStr = strings.TrimSpace(trStr)
+	if !isKnownTransform(trStr) {
+		return reflectx.DataTypeUnknown, 0, ErrUnknownTransform
+	}
+	return dt, transformFromString(trStr), nil
+}
+
+// dataTypeFromString maps a string to a DataType.
+func dataTypeFromString(s string) reflectx.DataType {
+	switch strings.ToLower(s) {
+	case "email":
+		return reflectx.DataTypeEmail
+	case "phone":
+		return reflectx.DataTypePhone
+	case "ssn":
+		return reflectx.DataTypeSSN
+	case "credit-card", "creditcard":
+		return reflectx.DataTypeCreditCard
+	case "password":
+		return reflectx.DataTypePassword
+	case "secret":
+		return reflectx.DataTypeSecret
+	case "api-key", "apikey":
+		return reflectx.DataTypeAPIKey
+	case "jwt":
+		return reflectx.DataTypeJWT
+	default:
+		return reflectx.DataTypeUnknown
+	}
+}
+
+// isKnownDataType reports whether s is a recognized data type string.
+func isKnownDataType(s string) bool {
+	return dataTypeFromString(s) != reflectx.DataTypeUnknown
+}
+
+// transformFromString maps a string to a Transform.
+func transformFromString(s string) reflectx.Transform {
+	switch strings.ToLower(s) {
+	case "redact":
+		return reflectx.TransformRedact
+	case "hash":
+		return reflectx.TransformHash
+	case "tokenize":
+		return reflectx.TransformTokenize
+	case "partial":
+		return reflectx.TransformPartial
+	default:
+		return reflectx.TransformRedact
+	}
+}
+
+// isKnownTransform reports whether s is a recognized transform string.
+func isKnownTransform(s string) bool {
+	switch strings.ToLower(s) {
+	case "redact", "hash", "tokenize", "partial":
+		return true
+	}
+	return false
 }
 
 // discoverFields walks the struct type t and calls onField for each field
@@ -106,6 +157,12 @@ func discoverFields(t reflect.Type, prefix []int, onField func(index []int, tag 
 		if !ok {
 			continue
 		}
+
+		// Rule 1: mask:"-" → skip the field.
+		if tag == "-" {
+			continue
+		}
+
 		onField(index, tag)
 	}
 }

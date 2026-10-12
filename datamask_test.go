@@ -28,12 +28,12 @@ type hasOmit struct {
 
 type withHash struct {
 	Name  string
-	Token string `mask:"hash"`
+	Token string `mask:"secret,hash"`
 }
 
 type withPartial struct {
 	Name  string
-	Phone string `mask:"partial"`
+	Phone string `mask:"phone,partial"`
 }
 
 // -- Tests: New and Config --
@@ -193,7 +193,7 @@ func TestRedactWithTokenizeKey(t *testing.T) {
 
 	// Struct with a tokenize-tagged field.
 	type tokStruct struct {
-		ID string `mask:"tokenize"`
+		ID string `mask:"secret,tokenize"`
 	}
 	v := tokStruct{ID: "user-123"}
 
@@ -244,27 +244,21 @@ func TestRedactInPlace(t *testing.T) {
 	}
 }
 
-func TestRedactInPlacePanicsOnNonPointer(t *testing.T) {
+func TestRedactInPlaceErrorOnNonPointer(t *testing.T) {
 	m := New()
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic for non-pointer")
-		}
-	}()
-
-	m.RedactInPlace(customer{})
+	err := m.RedactInPlace(customer{})
+	if err == nil {
+		t.Error("expected error for non-pointer")
+	}
 }
 
-func TestRedactInPlacePanicsOnNil(t *testing.T) {
+func TestRedactInPlaceErrorOnNil(t *testing.T) {
 	m := New()
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic for nil pointer")
-		}
-	}()
-
 	var v *customer
-	m.RedactInPlace(v)
+	err := m.RedactInPlace(v)
+	if err == nil {
+		t.Error("expected error for nil pointer")
+	}
 }
 
 // -- Tests: Apply --
@@ -442,7 +436,7 @@ func TestHashEmailsWithPointerToString(t *testing.T) {
 	m := New()
 	type cfg struct {
 		Name  string
-		Token *string `mask:"hash"`
+		Token *string `mask:"secret,hash"`
 	}
 	tok := "secret"
 	v := cfg{Name: "test", Token: &tok}
@@ -457,7 +451,7 @@ func TestHashEmailsWithPointerToString(t *testing.T) {
 func TestRedactTokenizeWithMAC(t *testing.T) {
 	m := New(WithTokenizeKey("my-key"))
 	type rec struct {
-		ID string `mask:"tokenize"`
+		ID string `mask:"secret,tokenize"`
 	}
 	v := rec{ID: "user-1"}
 	masked, err := Redact(m, v)
@@ -521,15 +515,13 @@ func TestRedactInPlaceUntagged(t *testing.T) {
 	}
 }
 
-func TestRedactInPlacePanicsOnNonStructPointer(t *testing.T) {
+func TestRedactInPlaceErrorOnNonStructPointer(t *testing.T) {
 	m := New()
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic for pointer to non-struct")
-		}
-	}()
 	x := 42
-	_ = m.RedactInPlace(&x)
+	err := m.RedactInPlace(&x)
+	if err == nil {
+		t.Error("expected error for pointer to non-struct")
+	}
 }
 
 func TestRedactPIIOnNonStruct(t *testing.T) {
@@ -558,7 +550,7 @@ func TestRedactWithHashKey(t *testing.T) {
 	// When HashKey is set, HashStrategy uses Tokenize (salted) instead of plain Hash.
 	m := New(WithHashKey("salt"))
 	type hashStruct struct {
-		ID string `mask:"hash"`
+		ID string `mask:"secret,hash"`
 	}
 	v := hashStruct{ID: "my-token"}
 

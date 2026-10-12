@@ -23,16 +23,24 @@ type Config struct {
 	// HashKey is reserved for future use (salted hashing).
 	HashKey string
 
+	// MaxTraversalDepth is the maximum object graph depth during
+	// Redact traversal. Default 100. Set to 0 to disable the limit
+	// (not recommended). Exceeding the limit returns an error.
+	MaxTraversalDepth int
+
 	// tokenizeMAC is a pre-computed HMAC for the Tokenize strategy.
 	// Built once at Masker construction to avoid per-call allocations.
 	tokenizeMAC hash.Hash
 }
 
 // initTokenizeMAC pre-computes the HMAC for the Tokenize strategy so
-// callers don't allocate on every Tokenize call.
+// callers don't allocate on every Tokenize call..
 func (c *Config) initTokenizeMAC() {
 	if c.TokenizeKey != "" {
 		c.tokenizeMAC = hmac.New(sha256.New, []byte(c.TokenizeKey))
+	}
+	if c.MaxTraversalDepth == 0 {
+		c.MaxTraversalDepth = 100
 	}
 }
 
@@ -57,5 +65,13 @@ func WithTokenizeKey(key string) Option {
 func WithHashKey(key string) Option {
 	return func(c *Config) {
 		c.HashKey = key
+	}
+}
+
+// WithMaxTraversalDepth sets the maximum object graph traversal depth
+// during Redact. Default 100. Values <= 0 use the default.
+func WithMaxTraversalDepth(depth int) Option {
+	return func(c *Config) {
+		c.MaxTraversalDepth = depth
 	}
 }

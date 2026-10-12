@@ -1,8 +1,11 @@
 package datamask
 
 import (
+	"errors"
 	"reflect"
 	"testing"
+
+	"github.com/datamaskio/datamask/internal/reflectx"
 )
 
 // -- Test types for tag parsing --
@@ -27,12 +30,12 @@ type optOutStruct struct {
 
 type mixedStrategy struct {
 	Name  string
-	Email string `mask:"email"`    // → RedactStrategy
-	Token string `mask:"hash"`     // → HashStrategy
-	Alias string `mask:"tokenize"` // → TokenizeStrategy
-	Phone string `mask:"partial"`  // → PartialStrategy
-	SSN   string `mask:"secret"`   // → RedactStrategy
-	Bogus string `mask:"xyzzy"`    // unknown → RedactStrategy
+	Email string `mask:"email"`           // → DataTypeEmail, TransformRedact
+	Token string `mask:"email,hash"`      // → DataTypeEmail, TransformHash
+	Alias string `mask:"secret,tokenize"` // → DataTypeSecret, TransformTokenize
+	Phone string `mask:"phone,partial"`   // → DataTypePhone, TransformPartial
+	SSN   string `mask:"ssn"`             // → DataTypeSSN, TransformRedact
+	JWT   string `mask:"jwt"`             // → DataTypeJWT, TransformRedact
 }
 
 type caseInsensitive struct {
@@ -57,110 +60,181 @@ type pointerField struct {
 
 // -- Tests --
 
-func TestParseTagsSingleTag(t *testing.T) {
-	meta := parseTags(reflect.TypeFor[simpleStruct]())
+func TestParseTagsSimple(t *testing.T) {
+	meta, err := parseTags(reflect.TypeFor[simpleStruct]())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if len(meta.Fields) != 3 {
 		t.Fatalf("expected 3 tagged fields (including unexported), got %d", len(meta.Fields))
 	}
 
-	// Field 0: Name — no tag
-	// Field 1: Email — mask:"email"
-	// Field 2: Phone — mask:"phone"
-	// Field 3: ssn — mask:"secret" (unexported, but still discovered by type walk)
-
-	findField(t, meta.Fields, []int{1}, RedactStrategy) // Email
-	findField(t, meta.Fields, []int{2}, RedactStrategy) // Phone
-	findField(t, meta.Fields, []int{3}, RedactStrategy) // ssn
+	findField(t, meta.Fields, []int{1}, DataTypeEmail, TransformRedact)  // Email
+	findField(t, meta.Fields, []int{2}, DataTypePhone, TransformRedact)  // Phone
+	findField(t, meta.Fields, []int{3}, DataTypeSecret, TransformRedact) // ssn
 }
 
 func TestParseTagsUntaggedStruct(t *testing.T) {
-	meta := parseTags(reflect.TypeFor[untaggedStruct]())
+	meta, err := parseTags(reflect.TypeFor[untaggedStruct]())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if len(meta.Fields) != 0 {
 		t.Errorf("expected 0 fields for untagged struct, got %d", len(meta.Fields))
 	}
 }
 
 func TestParseTagsOptOut(t *testing.T) {
-	meta := parseTags(reflect.TypeFor[optOutStruct]())
-	// mask:"-" should be excluded, mask:"phone" included
+	meta, err := parseTags(reflect.TypeFor[optOutStruct]())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if len(meta.Fields) != 1 {
 		t.Fatalf("expected 1 field (mask:\"-\" excluded), got %d", len(meta.Fields))
 	}
-	findField(t, meta.Fields, []int{2}, RedactStrategy) // Phone
+	findField(t, meta.Fields, []int{2}, DataTypePhone, TransformRedact) // Phone
 }
 
 func TestParseTagsMixedStrategies(t *testing.T) {
-	meta := parseTags(reflect.TypeFor[mixedStrategy]())
+	meta, err := parseTags(reflect.TypeFor[mixedStrategy]())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	tests := []struct {
-		index    []int
-		strategy Strategy
+		index     []int
+		dataType  DataType
+		transform Transform
 	}{
-		{[]int{1}, RedactStrategy},   // Email: mask:"email"
-		{[]int{2}, HashStrategy},     // Token: mask:"hash"
-		{[]int{3}, TokenizeStrategy}, // Alias: mask:"tokenize"
-		{[]int{4}, PartialStrategy},  // Phone: mask:"partial"
-		{[]int{5}, RedactStrategy},   // SSN: mask:"secret"
-		{[]int{6}, RedactStrategy},   // Bogus: mask:"xyzzy" → default
+		{[]int{1}, DataTypeEmail, TransformRedact}, // Email: mask:"email"
+		{[]int{2}, DataTypeEmail, TransformHash},   // Token: mask:"email,hash"
+		{[]int{3}, DataTypeSecret, TransformTokenize},
+		{[]int{4}, DataTypePhone, TransformPartial}, // Phone: mask:"phone,partial"
+		{[]int{5}, DataTypeSSN, TransformRedact},    // SSN: mask:"ssn"
+		{[]int{6}, DataTypeJWT, TransformRedact},    // JWT: mask:"jwt"
 	}
 
 	for _, tt := range tests {
-		findField(t, meta.Fields, tt.index, tt.strategy)
+		findFieldFull(t, meta.Fields, tt.index, tt.dataType, tt.transform)
+	}
+}
+
+func TestParseTagsRejectsTransformOnly(t *testing.T) {
+	for _, tag := range []string{"hash", "tokenize", "partial", "hash,redact", "", ",hash"} {
+		_, _, err := parseTagValue(tag)
+		if !errors.Is(err, ErrUnknownDataType) {
+			t.Errorf("tag %q: err = %v, want ErrUnknownDataType", tag, err)
+		}
+	}
+}
+
+func TestParseTagValue(t *testing.T) {
+	tests := []struct {
+		tag  string
+		dt   DataType
+		tr   Transform
+		want error
+	}{
+		{"email", DataTypeEmail, TransformRedact, nil},
+		{" email , hash ", DataTypeEmail, TransformHash, nil},
+		{"email,hash,key=value", DataTypeEmail, TransformHash, nil},
+		{"email,hash=x", DataTypeEmail, TransformHash, nil},
+		{"email,hsah", 0, 0, ErrUnknownTransform},
+		{"email,", 0, 0, ErrUnknownTransform},
+	}
+	for _, tt := range tests {
+		dt, tr, err := parseTagValue(tt.tag)
+		if !errors.Is(err, tt.want) {
+			t.Errorf("tag %q: err = %v, want %v", tt.tag, err, tt.want)
+			continue
+		}
+		if err == nil && (dt != tt.dt || tr != tt.tr) {
+			t.Errorf("tag %q: got (%v,%v), want (%v,%v)", tt.tag, dt, tr, tt.dt, tt.tr)
+		}
+	}
+}
+
+func TestParseTagsUnknownDataType(t *testing.T) {
+	type bad struct {
+		X string `mask:"bogus"`
+	}
+	_, err := parseTags(reflect.TypeFor[bad]())
+	if err == nil {
+		t.Fatal("expected error for unknown data type")
+	}
+}
+
+func TestParseTagsUnknownTransform(t *testing.T) {
+	type bad struct {
+		X string `mask:"email,encrypt"`
+	}
+	_, err := parseTags(reflect.TypeFor[bad]())
+	if err == nil {
+		t.Fatal("expected error for unknown transform")
 	}
 }
 
 func TestParseTagsCaseInsensitive(t *testing.T) {
-	meta := parseTags(reflect.TypeFor[caseInsensitive]())
-	// Both mask:"EMAIL" and mask:"Phone" should be treated as RedactStrategy
+	meta, err := parseTags(reflect.TypeFor[caseInsensitive]())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if len(meta.Fields) != 2 {
 		t.Fatalf("expected 2 fields, got %d", len(meta.Fields))
 	}
-	findField(t, meta.Fields, []int{0}, RedactStrategy) // Email (tag "EMAIL")
-	findField(t, meta.Fields, []int{1}, RedactStrategy) // Phone (tag "Phone")
+	findField(t, meta.Fields, []int{0}, DataTypeEmail, TransformRedact)
+	findField(t, meta.Fields, []int{1}, DataTypePhone, TransformRedact)
 }
 
 func TestParseTagsEmbeddedStruct(t *testing.T) {
-	meta := parseTags(reflect.TypeFor[anonymousEmbed]())
-	// The anonymous simpleStruct is promoted. Its tagged fields should appear
-	// with indices traversing through the embedded struct.
-	// Index: Field 1 of anonymousEmbed is simpleStruct, then field 1 of simpleStruct is Email.
+	meta, err := parseTags(reflect.TypeFor[anonymousEmbed]())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if len(meta.Fields) != 3 {
 		t.Fatalf("expected 3 promoted tagged fields, got %d", len(meta.Fields))
 	}
-	findField(t, meta.Fields, []int{1, 1}, RedactStrategy) // promoted Email
-	findField(t, meta.Fields, []int{1, 2}, RedactStrategy) // promoted Phone
-	findField(t, meta.Fields, []int{1, 3}, RedactStrategy) // promoted ssn
+	findField(t, meta.Fields, []int{1, 1}, DataTypeEmail, TransformRedact)  // promoted Email
+	findField(t, meta.Fields, []int{1, 2}, DataTypePhone, TransformRedact)  // promoted Phone
+	findField(t, meta.Fields, []int{1, 3}, DataTypeSecret, TransformRedact) // promoted ssn
 }
 
 func TestParseTagsNestedStruct(t *testing.T) {
-	meta := parseTags(reflect.TypeFor[embeddedParent]())
-	// Inner is a non-anonymous struct — its fields are NOT promoted.
-	// The tag walk should NOT discover fields of non-anonymous nested structs.
+	meta, err := parseTags(reflect.TypeFor[embeddedParent]())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if len(meta.Fields) != 0 {
 		t.Errorf("expected 0 fields (non-anonymous nested struct not walked), got %d", len(meta.Fields))
 	}
 }
 
 func TestParseTagsPointerField(t *testing.T) {
-	meta := parseTags(reflect.TypeFor[pointerField]())
-	// Name has mask:"secret" (direct field)
-	// Inner is *simpleStruct — pointer fields are not walked for tags
-
+	meta, err := parseTags(reflect.TypeFor[pointerField]())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if len(meta.Fields) < 1 {
 		t.Fatalf("expected at least 1 field (Name), got %d", len(meta.Fields))
 	}
-	findField(t, meta.Fields, []int{0}, RedactStrategy) // Name
+	findField(t, meta.Fields, []int{0}, DataTypeSecret, TransformRedact) // Name
 }
 
 func TestParseTagsNonStruct(t *testing.T) {
-	meta := parseTags(reflect.TypeFor[int]())
+	meta, err := parseTags(reflect.TypeFor[int]())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if len(meta.Fields) != 0 {
 		t.Errorf("expected 0 fields for non-struct type, got %d", len(meta.Fields))
 	}
 }
 
 func TestParseTagsPointerToStruct(t *testing.T) {
-	meta := parseTags(reflect.TypeOf(&simpleStruct{}))
+	meta, err := parseTags(reflect.TypeOf(&simpleStruct{}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if len(meta.Fields) != 3 {
 		t.Fatalf("expected 3 fields via pointer deref, got %d", len(meta.Fields))
 	}
@@ -168,12 +242,20 @@ func TestParseTagsPointerToStruct(t *testing.T) {
 
 // -- Helpers --
 
-func findField(t *testing.T, fields []FieldMeta, wantIndex []int, wantStrategy Strategy) {
+func findField(t *testing.T, fields []reflectx.FieldMeta, wantIndex []int, wantDataType DataType, wantTransform Transform) {
+	t.Helper()
+	findFieldFull(t, fields, wantIndex, wantDataType, wantTransform)
+}
+
+func findFieldFull(t *testing.T, fields []reflectx.FieldMeta, wantIndex []int, wantDataType DataType, wantTransform Transform) {
 	t.Helper()
 	for _, fm := range fields {
 		if indexEqual(fm.Index, wantIndex) {
-			if fm.Strategy != wantStrategy {
-				t.Errorf("field %v: strategy = %v, want %v", wantIndex, fm.Strategy, wantStrategy)
+			if fm.DataType != wantDataType {
+				t.Errorf("field %v: dataType = %v, want %v", wantIndex, fm.DataType, wantDataType)
+			}
+			if fm.Transform != wantTransform {
+				t.Errorf("field %v: transform = %v, want %v", wantIndex, fm.Transform, wantTransform)
 			}
 			return
 		}

@@ -6,65 +6,65 @@ import "github.com/datamaskio/datamask"
 
 var _masker = datamask.New()
 
-func (c Config) Mask() any {
+func (c Config) Mask() (any, error) {
 	if c.Token != nil {
 		(*c.Token) = "[REDACTED]"
 	}
-	return c
+	return c, nil
 }
 
 var _ datamask.Maskable = Config{}
 
-func (u User) Mask() any {
+func (u User) Mask() (any, error) {
 	u.Email = "[REDACTED]"
 	u.SSN = "[REDACTED]"
-	return u
+	return u, nil
 }
 
 var _ datamask.Maskable = User{}
 
-func (w WithMaskable) Mask() any {
+func (w WithMaskable) Mask() (any, error) {
 	masked := w.Email.Mask()
 	if v, ok := masked.(EmailMask); ok {
 		w.Email = v
 	}
-	return w
+	return w, nil
 }
 
 var _ datamask.Maskable = WithMaskable{}
 
-func (w WithMaskablePointer) Mask() any {
+func (w WithMaskablePointer) Mask() (any, error) {
 	if w.Email != nil {
 		masked := w.Email.Mask()
 		if v, ok := masked.(EmailMask); ok {
 			w.Email = &v
 		}
 	}
-	return w
+	return w, nil
 }
 
 var _ datamask.Maskable = WithMaskablePointer{}
 
-func (w WithMaskableTag) Mask() any {
+func (w WithMaskableTag) Mask() (any, error) {
 	masked := w.Email.Mask()
 	if v, ok := masked.(EmailMask); ok {
 		w.Email = v
 	}
-	return w
+	return w, nil
 }
 
 var _ datamask.Maskable = WithMaskableTag{}
 
-func (w WithOmit) Mask() any {
+func (w WithOmit) Mask() (any, error) {
 	w.Secret = "[REDACTED]"
-	return w
+	return w, nil
 }
 
 var _ datamask.Maskable = WithOmit{}
 
-func (w Wrapper[T]) Mask() any {
+func (w Wrapper[T]) Mask() (any, error) {
 	masked, _ := datamask.Redact(_masker, w)
-	return masked
+	return masked, nil
 }
 
 var _ datamask.Maskable = Wrapper[string]{}

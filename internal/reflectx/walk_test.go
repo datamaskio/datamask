@@ -47,20 +47,20 @@ func TestWalkPointerToStruct(t *testing.T) {
 	}
 
 	fields := []FieldMeta{
-		{Index: []int{1}, Strategy: RedactStrategy},
-		{Index: []int{2}, Strategy: HashStrategy},
-		{Index: []int{3}, Strategy: RedactStrategy}, // unexported — skipped
+		{Index: []int{1}, Transform: TransformRedact},
+		{Index: []int{2}, Transform: TransformHash},
+		{Index: []int{3}, Transform: TransformRedact}, // unexported — skipped
 	}
 
-	var visited []Strategy
+	var visited []Transform
 	Walk(v, fields, func(fv reflect.Value, fm FieldMeta) {
-		visited = append(visited, fm.Strategy)
+		visited = append(visited, fm.Transform)
 	})
 
 	if len(visited) != 2 {
 		t.Fatalf("expected 2 exported fields visited, got %d: %v", len(visited), visited)
 	}
-	if visited[0] != RedactStrategy || visited[1] != HashStrategy {
+	if visited[0] != TransformRedact || visited[1] != TransformHash {
 		t.Errorf("unexpected visit order: %v", visited)
 	}
 }
@@ -72,7 +72,7 @@ func TestWalkStructDirectly(t *testing.T) {
 	}
 
 	fields := []FieldMeta{
-		{Index: []int{1}, Strategy: RedactStrategy},
+		{Index: []int{1}, Transform: TransformRedact},
 	}
 
 	var visited int
@@ -89,7 +89,7 @@ func TestWalkNilPointer(t *testing.T) {
 	var v *taggedStruct = nil
 
 	fields := []FieldMeta{
-		{Index: []int{1}, Strategy: RedactStrategy},
+		{Index: []int{1}, Transform: TransformRedact},
 	}
 
 	var visited int
@@ -108,7 +108,7 @@ func TestWalkSkipsUnexported(t *testing.T) {
 	}
 
 	fields := []FieldMeta{
-		{Index: []int{3}, Strategy: RedactStrategy}, // unexported field ssn
+		{Index: []int{3}, Transform: TransformRedact}, // unexported field ssn
 	}
 
 	var visited int
@@ -125,7 +125,7 @@ func TestWalkInvalidFieldIndex(t *testing.T) {
 	v := &taggedStruct{}
 
 	fields := []FieldMeta{
-		{Index: []int{99}, Strategy: RedactStrategy}, // out of range
+		{Index: []int{99}, Transform: TransformRedact}, // out of range
 	}
 
 	// Invalid indices are skipped gracefully (no panic).
@@ -146,7 +146,7 @@ func TestWalkPanicsOnNonStruct(t *testing.T) {
 		}
 	}()
 
-	fields := []FieldMeta{{Index: []int{0}, Strategy: RedactStrategy}}
+	fields := []FieldMeta{{Index: []int{0}, Transform: TransformRedact}}
 	Walk(42, fields, func(fv reflect.Value, fm FieldMeta) {})
 }
 
@@ -158,7 +158,7 @@ func TestWalkPanicsOnNonStructPointer(t *testing.T) {
 	}()
 
 	var x int = 42
-	fields := []FieldMeta{{Index: []int{0}, Strategy: RedactStrategy}}
+	fields := []FieldMeta{{Index: []int{0}, Transform: TransformRedact}}
 	Walk(&x, fields, func(fv reflect.Value, fm FieldMeta) {})
 }
 
@@ -176,13 +176,13 @@ func TestWalkEmbeddedStruct(t *testing.T) {
 	//   Index[0] = 1 (taggedStruct field in embeddedOuter)
 	//   Index[1] = 1 (Email field in taggedStruct)
 	fields := []FieldMeta{
-		{Index: []int{1, 1}, Strategy: RedactStrategy},
-		{Index: []int{1, 2}, Strategy: HashStrategy},
+		{Index: []int{1, 1}, Transform: TransformRedact},
+		{Index: []int{1, 2}, Transform: TransformHash},
 	}
 
-	var visited []Strategy
+	var visited []Transform
 	Walk(v, fields, func(fv reflect.Value, fm FieldMeta) {
-		visited = append(visited, fm.Strategy)
+		visited = append(visited, fm.Transform)
 	})
 
 	if len(visited) != 2 {
@@ -195,7 +195,7 @@ func TestWalkNestedStruct(t *testing.T) {
 	v.Addr.Zip = "90210"
 
 	fields := []FieldMeta{
-		{Index: []int{0, 1}, Strategy: RedactStrategy}, // Addr.Zip
+		{Index: []int{0, 1}, Transform: TransformRedact}, // Addr.Zip
 	}
 
 	var visited int
@@ -219,8 +219,8 @@ func TestWalkNilPointerField(t *testing.T) {
 	}
 
 	fields := []FieldMeta{
-		{Index: []int{1, 0}, Strategy: RedactStrategy}, // Inner.Secret (nil)
-		{Index: []int{2, 0}, Strategy: RedactStrategy}, // Inner2.Secret (present)
+		{Index: []int{1, 0}, Transform: TransformRedact}, // Inner.Secret (nil)
+		{Index: []int{2, 0}, Transform: TransformRedact}, // Inner2.Secret (present)
 	}
 
 	var visited int
@@ -242,8 +242,8 @@ func BenchmarkWalk(b *testing.B) {
 		Phone: "+1-555-1234",
 	}
 	fields := []FieldMeta{
-		{Index: []int{1}, Strategy: RedactStrategy},
-		{Index: []int{2}, Strategy: RedactStrategy},
+		{Index: []int{1}, Transform: TransformRedact},
+		{Index: []int{2}, Transform: TransformRedact},
 	}
 
 	b.ResetTimer()

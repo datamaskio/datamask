@@ -9,31 +9,31 @@ import (
 
 type EmailMask string
 
-func (e EmailMask) Mask() any {
+func (e EmailMask) Mask() (any, error) {
 	s := string(e)
 	idx := strings.Index(s, "@")
 	if idx > 0 {
-		return EmailMask(s[:1] + "***" + s[idx:])
+		return EmailMask(s[:1] + "***" + s[idx:]), nil
 	}
-	return EmailMask("[EMAIL]")
+	return EmailMask("[EMAIL]"), nil
 }
 
 type creditCard string
 
-func (c *creditCard) Mask() any {
+func (c *creditCard) Mask() (any, error) {
 	s := string(*c)
 	if len(s) >= 6 {
 		result := creditCard(s[:4] + "****" + s[len(s)-4:])
-		return &result
+		return &result, nil
 	}
 	result := creditCard("[MASKED]")
-	return &result
+	return &result, nil
 }
 
 type maskedInt int
 
-func (m maskedInt) Mask() any {
-	return maskedInt(-1)
+func (m maskedInt) Mask() (any, error) {
+	return maskedInt(-1), nil
 }
 
 // -- Test types for Maskable integration --
@@ -339,8 +339,8 @@ func TestMaskableEmbeddedStruct(t *testing.T) {
 
 type secretValue string
 
-func (s *secretValue) Mask() any {
-	return secretValue("[SECRET]")
+func (s *secretValue) Mask() (any, error) {
+	return secretValue("[SECRET]"), nil
 }
 
 func TestMaskablePointerReceiverReturnsValue(t *testing.T) {
