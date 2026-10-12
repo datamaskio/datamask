@@ -254,7 +254,7 @@ func TestSchemaExplainGolden(t *testing.T) {
 		"\n  Email (string)\n    data type: email\n    transform: redact\n" +
 		"\n  SSN (string)\n    data type: ssn\n    transform: hash\n" +
 		"\n  Token (*string)\n    data type: secret\n    transform: tokenize\n"
-	if got := MustCompile[profile](New()).Explain(); got != want {
+	if got := MustCompile[profile](New(WithHashKey("h"), WithTokenizeKey("t"))).Explain(); got != want {
 		t.Errorf("Explain mismatch\ngot:\n%s\nwant:\n%s", got, want)
 	}
 	// Containers explain their element's fields.
@@ -388,5 +388,65 @@ func TestSchemaValidateNestedAndContainers(t *testing.T) {
 	}
 	if err := MustCompile[[]cyclic](m).Validate(); err != nil {
 		t.Errorf("self-referential type: %v", err)
+	}
+}
+
+// -- P3.3: keys for hash and tokenize --
+
+func TestCompileRejectsKeylessHashAndTokenize(t *testing.T) {
+	type hashed struct {
+		ID string `mask:"secret,hash"`
+	}
+	type tokenized struct {
+		ID string `mask:"secret,tokenize"`
+	}
+	type nested struct {
+		In hashed
+	}
+
+	_, err := Compile[hashed](New())
+	if !errors.Is(err, ErrInvalidSchema) || !strings.Contains(err.Error(), "hashed.ID") || !strings.Contains(err.Error(), "WithHashKey") {
+		t.Errorf("hash err = %v, want ErrInvalidSchema naming field and WithHashKey", err)
+	}
+	_, err = Compile[tokenized](New())
+	if !errors.Is(err, ErrInvalidSchema) || !strings.Contains(err.Error(), "tokenized.ID") || !strings.Contains(err.Error(), "WithTokenizeKey") {
+		t.Errorf("tokenize err = %v, want ErrInvalidSchema naming field and WithTokenizeKey", err)
+	}
+
+	// The other key does not satisfy the requirement.
+	if _, err := Compile[hashed](New(WithTokenizeKey("t"))); !errors.Is(err, ErrInvalidSchema) {
+		t.Errorf("hash with only tokenize key: err = %v", err)
+	}
+	if _, err := Compile[tokenized](New(WithHashKey("h"))); !errors.Is(err, ErrInvalidSchema) {
+		t.Errorf("tokenize with only hash key: err = %v", err)
+	}
+
+	// Keys present: compiles and masks.
+	if _, err := Compile[hashed](New(WithHashKey("h"))); err != nil {
+		t.Errorf("hash with key: %v", err)
+	}
+	if _, err := Compile[tokenized](New(WithTokenizeKey("t"))); err != nil {
+		t.Errorf("tokenize with key: %v", err)
+	}
+
+	// Redact (which compiles) and nested types fail closed too.
+	if got, err := Redact(New(), hashed{ID: "x"}); !errors.Is(err, ErrInvalidSchema) || got != (hashed{}) {
+		t.Errorf("Redact = (%+v, %v)", got, err)
+	}
+	if _, err := Redact(New(), nested{In: hashed{ID: "x"}}); !errors.Is(err, ErrInvalidSchema) {
+		t.Errorf("nested Redact err = %v", err)
+	}
+	if err := MustCompile[nested](New()).Validate(); !errors.Is(err, ErrInvalidSchema) {
+		t.Errorf("Validate nested err = %v", err)
+	}
+}
+
+func TestCompileKeylessRedactAndPartialUnaffected(t *testing.T) {
+	type plain struct {
+		Email string `mask:"email"`
+		Phone string `mask:"phone,partial"`
+	}
+	if _, err := Compile[plain](New()); err != nil {
+		t.Errorf("redact/partial without keys: %v", err)
 	}
 }

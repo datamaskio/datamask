@@ -3,6 +3,7 @@ package datamask
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -157,7 +158,7 @@ func TestRedactOmit(t *testing.T) {
 }
 
 func TestRedactHashStrategy(t *testing.T) {
-	m := New()
+	m := New(WithHashKey("k1"))
 	v := withHash{Name: "test", Token: "my-secret-token"}
 
 	masked, err := Redact(m, v)
@@ -165,12 +166,19 @@ func TestRedactHashStrategy(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// HashStrategy should produce a sha256: prefix.
-	if len(masked.Token) < 7 || masked.Token[:7] != "sha256:" {
-		t.Errorf("Token = %q, expected sha256: prefix", masked.Token)
+	// A keyed hash is an HMAC pseudonym, never the raw value.
+	if !strings.HasPrefix(masked.Token, "tok:") {
+		t.Errorf("Token = %q, expected tok: prefix", masked.Token)
 	}
 	if masked.Token == "my-secret-token" {
-		t.Error("Token was not hashed")
+		t.Error("Token should be hashed")
+	}
+	if masked.Name != "test" {
+		t.Error("untagged field changed")
+	}
+	other, _ := Redact(New(WithHashKey("k2")), v)
+	if other.Token == masked.Token {
+		t.Error("different keys produced the same hash")
 	}
 }
 
@@ -327,7 +335,7 @@ func TestRedactPIIPolicy(t *testing.T) {
 }
 
 func TestHashEmailsPolicy(t *testing.T) {
-	m := New()
+	m := New(WithHashKey("k"))
 	v := withHash{Name: "test", Token: "my-token"}
 
 	result, err := m.HashEmails()(v)
@@ -433,7 +441,7 @@ func TestRedactPIIWithPointerToString(t *testing.T) {
 }
 
 func TestHashEmailsWithPointerToString(t *testing.T) {
-	m := New()
+	m := New(WithHashKey("k"))
 	type cfg struct {
 		Name  string
 		Token *string `mask:"secret,hash"`
@@ -441,7 +449,10 @@ func TestHashEmailsWithPointerToString(t *testing.T) {
 	tok := "secret"
 	v := cfg{Name: "test", Token: &tok}
 
-	result, _ := m.HashEmails()(v)
+	result, err := m.HashEmails()(v)
+	if err != nil {
+		t.Fatal(err)
+	}
 	r := result.(cfg)
 	if *r.Token == tok {
 		t.Error("Token should be hashed, not same as original")

@@ -41,7 +41,7 @@ type Customer struct {
     Email string `mask:"email"`   // → [REDACTED]
     Phone string `mask:"phone"`   // → [REDACTED]
     SSN   string `mask:"secret"`  // → [REDACTED]
-    Alias string `mask:"secret,hash"`    // → sha256:abc...
+    Alias string `mask:"secret,hash"`    // → tok:abc... (needs WithHashKey)
     Card  string `mask:"credit-card,partial"` // → ****-****-****-1234
 }
 ```
@@ -51,7 +51,7 @@ Tag values map to strategies:
 | Tag value | Strategy | Output example |
 |---|---|---|
 | `email`, `phone`, `secret`, `ssn`, `credit-card` | Redact | `[REDACTED]` |
-| `hash` | SHA-256 hash | `sha256:f83aa...` |
+| `hash` | Keyed HMAC hash (needs `WithHashKey`) | `tok:f83aa...` |
 | `partial` | Partial mask | `j***@example.com` |
 | `tokenize` | HMAC pseudonym (needs key) | `tok:9c8d2a...` |
 | `-` | Skip | (passed through) |

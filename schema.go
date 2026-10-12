@@ -129,6 +129,9 @@ func (m *Masker) compile(t reflect.Type) (*compiledSchema, error) {
 				return nil, fmt.Errorf("%w: %v.%s: mask tag on unexported field cannot be applied", ErrInvalidSchema, t.Name(), f.Path)
 			}
 		}
+		if err := m.checkKeys(t, meta); err != nil {
+			return nil, err
+		}
 		plan.meta = meta
 		plan.warnings = unverifiableFields(t)
 	case reflect.Pointer, reflect.Slice, reflect.Array:
@@ -316,4 +319,19 @@ func walkUnverifiable(t reflect.Type, prefix string, seen map[reflect.Type]bool,
 			walkUnverifiable(ft, path, seen, out)
 		}
 	}
+}
+
+// checkKeys rejects hash and tokenize fields when the Masker has no key for
+// them. A missing key must fail at Compile, never produce a weak,
+// unkeyed pseudonym at runtime (ADR-0024).
+func (m *Masker) checkKeys(t reflect.Type, meta *reflectx.TypeMeta) error {
+	for _, f := range meta.Fields {
+		switch {
+		case f.Transform == TransformHash && m.cfg.HashKey == "":
+			return fmt.Errorf("%w: %s.%s: transform hash requires a key; configure WithHashKey", ErrInvalidSchema, t.Name(), f.Path)
+		case f.Transform == TransformTokenize && m.cfg.TokenizeKey == "":
+			return fmt.Errorf("%w: %s.%s: transform tokenize requires a key; configure WithTokenizeKey", ErrInvalidSchema, t.Name(), f.Path)
+		}
+	}
+	return nil
 }

@@ -15,12 +15,12 @@ type Config struct {
 	// formats (API keys, tokens, JWTs) during Redact.
 	DetectSecrets bool
 
-	// TokenizeKey is the HMAC key used by the Tokenize strategy.
-	// A zero-value key still produces pseudonyms but with no
-	// cryptographic isolation from other deployments.
+	// TokenizeKey is the HMAC key used by the Tokenize transform.
+	// Compile rejects schemas with tokenize fields when it is empty.
 	TokenizeKey string
 
-	// HashKey is reserved for future use (salted hashing).
+	// HashKey is the HMAC key used by the Hash transform. Compile rejects
+	// schemas with hash fields when it is empty.
 	HashKey string
 
 	// MaxTraversalDepth is the maximum object graph depth during
@@ -61,7 +61,7 @@ func WithTokenizeKey(key string) Option {
 	}
 }
 
-// WithHashKey sets the hash key for future salted-hashing support.
+// WithHashKey sets the HMAC key for the Hash transform.
 func WithHashKey(key string) Option {
 	return func(c *Config) {
 		c.HashKey = key
