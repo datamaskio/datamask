@@ -78,3 +78,141 @@ func BenchmarkPartialGeneric(b *testing.B) {
 		Partial("sensitive_value_here")
 	}
 }
+
+// -- Selective-copy benchmarks (Checkpoint 4) --
+
+type benchProfile struct {
+	Avatar string
+	Email  string `mask:"email"`
+}
+
+type benchPlain struct {
+	Label string
+	Tags  []string
+}
+
+type benchNested struct {
+	Name    string
+	Profile *benchProfile
+	Plain   *benchPlain
+	Orders  []benchProfile
+}
+
+func benchNestedValue() benchNested {
+	return benchNested{
+		Name:    "Ann",
+		Profile: &benchProfile{Avatar: "a.png", Email: "ann@example.com"},
+		Plain:   &benchPlain{Label: "x", Tags: []string{"a", "b"}},
+		Orders:  []benchProfile{{Email: "a@x.y"}, {Email: "b@x.y"}, {Email: "c@x.y"}},
+	}
+}
+
+func BenchmarkRedactNested(b *testing.B) {
+	m := New()
+	v := benchNestedValue()
+	b.ReportAllocs()
+	for b.Loop() {
+		_, _ = Redact(m, v)
+	}
+}
+
+func BenchmarkRedactInPlaceNested(b *testing.B) {
+	m := New()
+	b.ReportAllocs()
+	for b.Loop() {
+		v := benchNestedValue()
+		_ = m.RedactInPlace(&v)
+	}
+}
+
+// Nothing to mask below the top struct: should be close to a plain copy.
+func BenchmarkRedactNothingToMask(b *testing.B) {
+	m := New()
+	v := struct {
+		Plain *benchPlain
+		List  []benchPlain
+		Tags  map[string]int
+	}{Plain: &benchPlain{Label: "x"}, List: make([]benchPlain, 50), Tags: map[string]int{"a": 1}}
+	b.ReportAllocs()
+	for b.Loop() {
+		_, _ = Redact(m, v)
+	}
+}
+
+func BenchmarkRedactSlice100(b *testing.B) {
+	m := New()
+	v := make([]benchProfile, 100)
+	for i := range v {
+		v[i] = benchProfile{Avatar: "a", Email: "u@example.com"}
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		_, _ = Redact(m, v)
+	}
+}
+
+func BenchmarkRedactMap10(b *testing.B) {
+	m := New()
+	v := make(map[string]benchProfile, 10)
+	for _, k := range []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"} {
+		v[k] = benchProfile{Email: "u@example.com"}
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		_, _ = Redact(m, v)
+	}
+}
+
+func BenchmarkRedactInterface(b *testing.B) {
+	m := New()
+	v := struct{ Payload any }{Payload: benchProfile{Email: "u@example.com"}}
+	b.ReportAllocs()
+	for b.Loop() {
+		_, _ = Redact(m, v)
+	}
+}
+
+func BenchmarkSchemaRedact(b *testing.B) {
+	s := MustCompile[benchUser](New())
+	user := benchUser{Name: "John Doe", Email: "john@example.com", Phone: "+1-555-1234", SSN: "123-45-6789"}
+	b.ReportAllocs()
+	for b.Loop() {
+		_, _ = s.Redact(user)
+	}
+}
+
+func BenchmarkSchemaRedactNested(b *testing.B) {
+	s := MustCompile[benchNested](New())
+	v := benchNestedValue()
+	b.ReportAllocs()
+	for b.Loop() {
+		_, _ = s.Redact(v)
+	}
+}
+
+func BenchmarkCompileCacheHit(b *testing.B) {
+	m := New()
+	_ = MustCompile[benchNested](m)
+	b.ReportAllocs()
+	for b.Loop() {
+		_, _ = Compile[benchNested](m)
+	}
+}
+
+func BenchmarkCompileCold(b *testing.B) {
+	b.ReportAllocs()
+	for b.Loop() {
+		_, _ = Compile[benchNested](New())
+	}
+}
+
+func BenchmarkRedactParallel(b *testing.B) {
+	m := New()
+	v := benchNestedValue()
+	b.ReportAllocs()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			_, _ = Redact(m, v)
+		}
+	})
+}
