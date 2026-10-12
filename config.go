@@ -24,8 +24,8 @@ type Config struct {
 	HashKey string
 
 	// MaxTraversalDepth is the maximum object graph depth during
-	// Redact traversal. Default 100. Set to 0 to disable the limit
-	// (not recommended). Exceeding the limit returns an error.
+	// Redact traversal. Values <= 0 select the default, 100. Exceeding
+	// the limit returns ErrMaxDepthExceeded.
 	MaxTraversalDepth int
 
 	// tokenizeMAC is a pre-computed HMAC for the Tokenize strategy.
@@ -39,7 +39,7 @@ func (c *Config) initTokenizeMAC() {
 	if c.TokenizeKey != "" {
 		c.tokenizeMAC = hmac.New(sha256.New, []byte(c.TokenizeKey))
 	}
-	if c.MaxTraversalDepth == 0 {
+	if c.MaxTraversalDepth <= 0 {
 		c.MaxTraversalDepth = 100
 	}
 }

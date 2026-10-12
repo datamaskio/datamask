@@ -79,6 +79,13 @@ func maskField(fv reflect.Value) (bool, error) {
 		return true, fmt.Errorf("%w: %w", ErrMaskFailed, err)
 	}
 	rv := reflect.ValueOf(result)
+	// A *T field whose T.Mask() returns a T value: store a pointer to a new
+	// copy, never the original target (matches generated code).
+	if rv.IsValid() && fv.Kind() == reflect.Pointer && rv.Type().AssignableTo(fv.Type().Elem()) {
+		np := reflect.New(fv.Type().Elem())
+		np.Elem().Set(rv)
+		rv = np
+	}
 	if !rv.IsValid() || !rv.Type().AssignableTo(fv.Type()) {
 		fv.SetZero()
 		return true, fmt.Errorf("%w: Mask() returned %T, want %v", ErrMaskFailed, result, fv.Type())

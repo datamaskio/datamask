@@ -212,3 +212,22 @@ func TestApplyMaskableFieldsEmbedded(t *testing.T) {
 		}
 	})
 }
+
+func TestMaskFieldPointerFieldValueResult(t *testing.T) {
+	m := New()
+	orig := &okVal{S: "secret"}
+	got, err := Redact(m, ptrHolder[okVal]{Name: "n", F: orig})
+	if err != nil || got.F == nil || got.F.S != "***" {
+		t.Fatalf("got (%+v, %v)", got, err)
+	}
+	if got.F == orig || orig.S != "secret" {
+		t.Error("must store a new pointer and leave the original target untouched")
+	}
+	h := &ptrHolder[okVal]{F: orig}
+	if err := m.RedactInPlace(h); err != nil || h.F.S != "***" {
+		t.Errorf("in place: (%+v, %v)", h.F, err)
+	}
+	if h.F == orig || orig.S != "secret" {
+		t.Error("in place must swap in a new pointer, not mutate a possibly shared target")
+	}
+}

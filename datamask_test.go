@@ -417,10 +417,13 @@ func TestRedactCyclicStruct(t *testing.T) {
 	node := &Node{Name: "first"}
 	node.Next = node // self-referential
 
-	// Should not stack-overflow.
-	_, err := Redact(m, node)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	// No stack overflow, and no unmasked pointer handed back: a cycle is an error.
+	got, err := Redact(m, node)
+	if !errors.Is(err, ErrCyclicReference) {
+		t.Fatalf("err = %v, want ErrCyclicReference", err)
+	}
+	if got != nil {
+		t.Errorf("got %+v, want nil", got)
 	}
 }
 
