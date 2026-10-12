@@ -134,7 +134,7 @@ func (m *Masker) compile(t reflect.Type) (*compiledSchema, error) {
 		}
 		plan.meta = meta
 		plan.warnings = unverifiableFields(t)
-	case reflect.Pointer, reflect.Slice, reflect.Array:
+	case reflect.Pointer, reflect.Slice, reflect.Array, reflect.Map:
 		// Validate the element eagerly; the container carries no plan.
 		elem, err := m.compile(t.Elem())
 		if err != nil && !plan.maskable {

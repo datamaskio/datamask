@@ -40,7 +40,7 @@ func callMaskOnField(fv reflect.Value) (result any, ok bool, err error) {
 
 	// Direct: T implements Maskable (includes pointers to Maskable value types).
 	if t.Implements(typeOfMaskable) {
-		if fv.Kind() == reflect.Pointer && fv.IsNil() {
+		if (fv.Kind() == reflect.Pointer || fv.Kind() == reflect.Interface) && fv.IsNil() {
 			return nil, false, nil
 		}
 		result, err = fv.Interface().(Maskable).Mask()

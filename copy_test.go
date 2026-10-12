@@ -469,8 +469,11 @@ func TestRedactEngineEdgeCases(t *testing.T) {
 	m := New()
 
 	t.Run("unsupported top-level kind", func(t *testing.T) {
-		if _, err := m.RedactAny(map[string]cpProfile{"a": {}}); err == nil {
-			t.Error("expected an error for a map")
+		if _, err := m.RedactAny(42); err == nil {
+			t.Error("expected an error for an int")
+		}
+		if _, err := m.RedactAny(make(chan int)); err == nil {
+			t.Error("expected an error for a chan")
 		}
 	})
 	t.Run("nil slice and empty slice", func(t *testing.T) {

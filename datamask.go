@@ -174,17 +174,82 @@ func (m *Masker) redactVisited(v any, st *walkState, depth int) (any, error) {
 			out = reflect.New(rv.Type()).Elem()
 		}
 		for i := range rv.Len() {
-			redacted, err := m.redactVisited(rv.Index(i).Interface(), st, depth+1)
+			redacted, err := m.redactElem(rv.Index(i), st, depth+1)
 			if err != nil {
 				return nil, err
 			}
-			out.Index(i).Set(reflect.ValueOf(redacted))
+			out.Index(i).Set(redacted)
+		}
+		return out.Interface(), nil
+
+	case reflect.Map:
+		if rv.IsNil() {
+			return v, nil
+		}
+		need, err := m.touches(rv.Type().Elem())
+		if err != nil {
+			return nil, err
+		}
+		if !need {
+			return v, nil // values need no masking: share the map
+		}
+		if m.exceedsDepth(depth + 1) {
+			return nil, fmt.Errorf("%w: limit %d", ErrMaxDepthExceeded, m.cfg.MaxTraversalDepth)
+		}
+		// Copy-on-write: build a new map; keys are never masked.
+		out := reflect.MakeMapWithSize(rv.Type(), rv.Len())
+		iter := rv.MapRange()
+		for iter.Next() {
+			redacted, err := m.redactElem(iter.Value(), st, depth+1)
+			if err != nil {
+				return nil, err
+			}
+			out.SetMapIndex(iter.Key(), redacted)
 		}
 		return out.Interface(), nil
 
 	default:
-		return nil, fmt.Errorf("datamask: Redact requires a struct, slice, or array, got %v", rv.Kind())
+		return nil, fmt.Errorf("datamask: Redact requires a struct, slice, array, map or pointer, got %v", rv.Kind())
 	}
+}
+
+// redactElem redacts one slice, array or map element (or interface field
+// value) and returns a value assignable to the element's static type.
+// Interface-typed elements are unwrapped: nil stays nil, supported dynamic
+// types are walked, anything else (string, chan, func, ...) passes through.
+func (m *Masker) redactElem(ev reflect.Value, st *walkState, depth int) (reflect.Value, error) {
+	if ev.Kind() == reflect.Interface {
+		if ev.IsNil() {
+			return ev, nil
+		}
+		dyn := ev.Elem()
+		if !isWalkable(dyn.Type()) {
+			return ev, nil
+		}
+		res, err := m.redactVisited(dyn.Interface(), st, depth)
+		if err != nil {
+			return reflect.Value{}, err
+		}
+		out := reflect.New(ev.Type()).Elem()
+		out.Set(reflect.ValueOf(res))
+		return out, nil
+	}
+	res, err := m.redactVisited(ev.Interface(), st, depth)
+	if err != nil {
+		return reflect.Value{}, err
+	}
+	return reflect.ValueOf(res), nil
+}
+
+// isWalkable reports whether a dynamic type held in an interface is one the
+// walker handles: struct, pointer, slice, array, map, or anything Maskable.
+// chan, func, unsafe.Pointer and scalars pass through (ADR-0032).
+func isWalkable(t reflect.Type) bool {
+	switch t.Kind() {
+	case reflect.Struct, reflect.Pointer, reflect.Slice, reflect.Array, reflect.Map:
+		return true
+	}
+	return isMaskableType(t)
 }
 
 func (m *Masker) redactStructVisited(v any, st *walkState, depth int) (any, error) {
@@ -247,15 +312,18 @@ func (m *Masker) redactStructVisited(v any, st *walkState, depth int) (any, erro
 			continue
 		}
 		switch fv.Kind() {
-		case reflect.Struct, reflect.Pointer, reflect.Slice, reflect.Array:
+		case reflect.Struct, reflect.Pointer, reflect.Slice, reflect.Array, reflect.Map, reflect.Interface:
 		default:
 			continue
 		}
 		if isMaskableType(fv.Type()) {
 			continue // already masked by pass 0 / pass 1
 		}
-		if (fv.Kind() == reflect.Pointer || fv.Kind() == reflect.Slice) && fv.IsNil() {
-			continue
+		switch fv.Kind() {
+		case reflect.Pointer, reflect.Slice, reflect.Map, reflect.Interface:
+			if fv.IsNil() {
+				continue
+			}
 		}
 		need, err := m.touches(fv.Type())
 		if err != nil {
@@ -264,11 +332,11 @@ func (m *Masker) redactStructVisited(v any, st *walkState, depth int) (any, erro
 		if !need {
 			continue
 		}
-		redacted, err := m.redactVisited(fv.Interface(), st, depth+1)
+		redacted, err := m.redactElem(fv, st, depth+1)
 		if err != nil {
 			return nil, err
 		}
-		fv.Set(reflect.ValueOf(redacted))
+		fv.Set(redacted)
 	}
 
 	return cpPtr.Elem().Interface(), nil
@@ -431,7 +499,7 @@ func (m *Masker) inPlaceStruct(rv reflect.Value, st *walkState, depth int) error
 	for i := range rv.NumField() {
 		fv := rv.Field(i)
 		switch fv.Kind() {
-		case reflect.Struct, reflect.Pointer, reflect.Slice, reflect.Array:
+		case reflect.Struct, reflect.Pointer, reflect.Slice, reflect.Array, reflect.Map, reflect.Interface:
 		default:
 			continue
 		}
@@ -448,7 +516,7 @@ func (m *Masker) inPlaceStruct(rv reflect.Value, st *walkState, depth int) error
 // inPlaceValue masks the addressable value fv in place.
 func (m *Masker) inPlaceValue(fv reflect.Value, st *walkState, depth int) error {
 	switch fv.Kind() {
-	case reflect.Struct, reflect.Pointer, reflect.Slice, reflect.Array:
+	case reflect.Struct, reflect.Pointer, reflect.Slice, reflect.Array, reflect.Map, reflect.Interface:
 	default:
 		return nil
 	}
@@ -480,6 +548,41 @@ func (m *Masker) inPlaceValue(fv reflect.Value, st *walkState, depth int) error 
 				return err
 			}
 		}
+		return nil
+	case reflect.Map:
+		if fv.IsNil() {
+			return nil
+		}
+		if m.exceedsDepth(depth + 1) {
+			return fmt.Errorf("%w: limit %d", ErrMaxDepthExceeded, m.cfg.MaxTraversalDepth)
+		}
+		// Map values are not addressable: mask a copy of each value and
+		// store it back. Keys are never masked.
+		for _, k := range fv.MapKeys() {
+			cp := reflect.New(fv.Type().Elem()).Elem()
+			cp.Set(fv.MapIndex(k))
+			if err := m.inPlaceElem(cp, st, depth+1); err != nil {
+				return err
+			}
+			fv.SetMapIndex(k, cp)
+		}
+		return nil
+	case reflect.Interface:
+		if fv.IsNil() {
+			return nil
+		}
+		dyn := fv.Elem()
+		if !isWalkable(dyn.Type()) {
+			return nil
+		}
+		// The dynamic value is not addressable: work on a copy (slices,
+		// maps and pointers still reach the shared data) and store it back.
+		cp := reflect.New(dyn.Type()).Elem()
+		cp.Set(dyn)
+		if err := m.inPlaceElem(cp, st, depth); err != nil {
+			return err
+		}
+		fv.Set(cp)
 		return nil
 	default:
 		return m.inPlaceStruct(fv, st, depth)
