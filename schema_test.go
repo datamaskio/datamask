@@ -3,8 +3,13 @@ package datamask
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
+	"time"
+	"unsafe"
+
+	"github.com/datamaskio/datamask/internal/reflectx"
 )
 
 type schemaUser struct {
@@ -203,5 +208,185 @@ func TestRedactNilInterface(t *testing.T) {
 	got, err := Redact[any](New(), nil)
 	if !errors.Is(err, ErrInvalidInput) || got != nil {
 		t.Errorf("Redact(nil any) = (%v, %v), want nil and ErrInvalidInput", got, err)
+	}
+}
+
+// -- P3.2: Validate, Explain, Metadata, Warnings --
+
+func TestSchemaMetadata(t *testing.T) {
+	m := New()
+	before := time.Now()
+	s := MustCompile[schemaUser](m)
+	md := s.Metadata()
+	if md.TypeName != "schemaUser" || md.MaskerID != m.id || md.Version != Version {
+		t.Errorf("metadata = %+v", md)
+	}
+	if md.CreatedAt.Before(before) || md.CreatedAt.After(time.Now()) {
+		t.Errorf("CreatedAt %v outside compile window", md.CreatedAt)
+	}
+	if other := MustCompile[schemaUser](New()).Metadata(); other.MaskerID == md.MaskerID {
+		t.Error("distinct Maskers share an ID")
+	}
+	// Cached plan keeps its original CreatedAt.
+	if again := MustCompile[schemaUser](m).Metadata(); !again.CreatedAt.Equal(md.CreatedAt) {
+		t.Error("CreatedAt changed on cache hit")
+	}
+	if got := (&Schema[schemaUser]{}).Metadata(); got != (SchemaMetadata{}) {
+		t.Errorf("zero Schema metadata = %+v", got)
+	}
+	if got := MustCompile[[]schemaUser](m).Metadata().TypeName; got != "[]datamask.schemaUser" {
+		t.Errorf("slice TypeName = %q", got)
+	}
+}
+
+func TestSchemaExplainGolden(t *testing.T) {
+	type contact struct {
+		Phone string `mask:"phone,partial"`
+	}
+	type profile struct {
+		Name    string
+		Email   string  `mask:"email"`
+		SSN     string  `mask:"ssn,hash"`
+		Token   *string `mask:"secret,tokenize"`
+		Contact contact
+	}
+	want := "Schema: profile\n" +
+		"\n  Email (string)\n    data type: email\n    transform: redact\n" +
+		"\n  SSN (string)\n    data type: ssn\n    transform: hash\n" +
+		"\n  Token (*string)\n    data type: secret\n    transform: tokenize\n"
+	if got := MustCompile[profile](New()).Explain(); got != want {
+		t.Errorf("Explain mismatch\ngot:\n%s\nwant:\n%s", got, want)
+	}
+	// Containers explain their element's fields.
+	if got := MustCompile[[]schemaUser](New()).Explain(); !strings.HasPrefix(got, "Schema: []datamask.schemaUser\n") ||
+		!strings.Contains(got, "  Email (string)\n    data type: email\n") {
+		t.Errorf("slice Explain = %q", got)
+	}
+	if got := (&Schema[profile]{}).Explain(); !strings.Contains(got, "uninitialized") {
+		t.Errorf("zero Schema Explain = %q", got)
+	}
+}
+
+func TestSchemaExplainEmbeddedPathAndMaskable(t *testing.T) {
+	type base struct {
+		Email string `mask:"email"`
+	}
+	type child struct {
+		base
+		ID int
+	}
+	if got := MustCompile[child](New()).Explain(); !strings.Contains(got, "  base.Email (string)") {
+		t.Errorf("embedded path missing: %q", got)
+	}
+	if got := MustCompile[okVal](New()).Explain(); !strings.Contains(got, "Maskable: Mask() takes precedence") {
+		t.Errorf("maskable note missing: %q", got)
+	}
+}
+
+func TestSchemaWarnings(t *testing.T) {
+	type inner struct {
+		Any any
+	}
+	type risky struct {
+		Name    string
+		Payload any
+		Ch      chan int
+		Fn      func()
+		Ptr     unsafe.Pointer
+		List    []any
+		Nested  inner
+		Safe    okVal
+		Masked  Maskable
+		hidden  any //nolint:unused
+	}
+	s := MustCompile[risky](New())
+	got := map[string]string{}
+	for _, w := range s.Warnings() {
+		got[w.FieldPath] = w.Reason
+	}
+	for _, path := range []string{"risky.Payload", "risky.Ch", "risky.Fn", "risky.Ptr", "risky.List", "risky.Nested.Any"} {
+		if got[path] == "" {
+			t.Errorf("missing warning for %s; got %v", path, got)
+		}
+	}
+	for _, path := range []string{"risky.Name", "risky.Safe", "risky.Masked", "risky.hidden"} {
+		if _, ok := got[path]; ok {
+			t.Errorf("unexpected warning for %s", path)
+		}
+	}
+	if !strings.Contains(s.Explain(), "warning: risky.Payload: interface-typed field") {
+		t.Error("Explain should list warnings")
+	}
+	// Returned slice is a copy.
+	s.Warnings()[0].Reason = "tampered"
+	if s.Warnings()[0].Reason == "tampered" {
+		t.Error("Warnings exposes internal state")
+	}
+	if w := MustCompile[schemaUser](New()).Warnings(); len(w) != 0 {
+		t.Errorf("clean struct warnings = %v", w)
+	}
+	if w := (&Schema[risky]{}).Warnings(); w != nil {
+		t.Errorf("zero Schema warnings = %v", w)
+	}
+}
+
+func TestCompileRejectsTaggedUnexportedField(t *testing.T) {
+	type bad struct {
+		secret string `mask:"secret"`
+	}
+	_ = bad{secret: ""}
+	_, err := Compile[bad](New())
+	if !errors.Is(err, ErrInvalidSchema) {
+		t.Errorf("err = %v, want ErrInvalidSchema", err)
+	}
+}
+
+func TestSchemaValidate(t *testing.T) {
+	m := New()
+	if err := MustCompile[schemaUser](m).Validate(); err != nil {
+		t.Errorf("valid schema: %v", err)
+	}
+	if err := (&Schema[schemaUser]{}).Validate(); !errors.Is(err, ErrUninitialized) {
+		t.Errorf("zero Schema err = %v", err)
+	}
+
+	// A corrupted plan is reported, not trusted.
+	s := MustCompile[schemaUser](New())
+	s.plan.meta = &reflectx.TypeMeta{Fields: []reflectx.FieldMeta{{Path: "Email", DataType: reflectx.DataType(99)}}}
+	if err := s.Validate(); !errors.Is(err, ErrInvalidSchema) || !errors.Is(err, ErrUnknownDataType) {
+		t.Errorf("bad data type err = %v", err)
+	}
+	s.plan.meta = &reflectx.TypeMeta{Fields: []reflectx.FieldMeta{{Path: "Email", DataType: reflectx.DataTypeEmail, Transform: reflectx.Transform(99)}}}
+	if err := s.Validate(); !errors.Is(err, ErrInvalidSchema) || !errors.Is(err, ErrUnknownTransform) {
+		t.Errorf("bad transform err = %v", err)
+	}
+	s.plan.meta = &reflectx.TypeMeta{Fields: []reflectx.FieldMeta{{Path: "x", DataType: reflectx.DataTypeEmail, Unexported: true}}}
+	if err := s.Validate(); !errors.Is(err, ErrInvalidSchema) {
+		t.Errorf("unexported err = %v", err)
+	}
+}
+
+func TestSchemaValidateNestedAndContainers(t *testing.T) {
+	type badLeaf struct {
+		X string `mask:"hash"`
+	}
+	type holder struct {
+		Items []badLeaf
+	}
+	type cyclic struct {
+		Self *cyclic
+		Mail string `mask:"email"`
+	}
+	m := New()
+	// The nested bad tag compiles lazily, so Compile succeeds but Validate catches it.
+	s, err := Compile[holder](m)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	if err := s.Validate(); !errors.Is(err, ErrInvalidSchema) || !errors.Is(err, ErrUnknownDataType) {
+		t.Errorf("nested err = %v, want ErrInvalidSchema wrapping ErrUnknownDataType", err)
+	}
+	if err := MustCompile[[]cyclic](m).Validate(); err != nil {
+		t.Errorf("self-referential type: %v", err)
 	}
 }

@@ -37,10 +37,14 @@ func parseTags(t reflect.Type) (*reflectx.TypeMeta, error) {
 		// Copy the index slice since the walk reuses the backing array.
 		idx := make([]int, len(index))
 		copy(idx, index)
+		path, goType, unexported := describeField(t, idx)
 		meta.Fields = append(meta.Fields, reflectx.FieldMeta{
-			Index:     idx,
-			DataType:  dt,
-			Transform: tr,
+			Index:      idx,
+			DataType:   dt,
+			Transform:  tr,
+			Path:       path,
+			GoType:     goType,
+			Unexported: unexported,
 		})
 	})
 	return meta, firstErr
@@ -155,4 +159,20 @@ func discoverFields(t reflect.Type, prefix []int, onField func(index []int, tag 
 
 		onField(index, tag)
 	}
+}
+
+// describeField resolves a field-index path against t, returning the dotted
+// Go field path, the leaf field's type, and whether the leaf is unexported.
+func describeField(t reflect.Type, index []int) (path, goType string, unexported bool) {
+	var names []string
+	var leaf reflect.StructField
+	for _, i := range index {
+		if t.Kind() == reflect.Pointer {
+			t = t.Elem()
+		}
+		leaf = t.Field(i)
+		names = append(names, leaf.Name)
+		t = leaf.Type
+	}
+	return strings.Join(names, "."), leaf.Type.String(), !leaf.IsExported()
 }

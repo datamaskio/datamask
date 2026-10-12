@@ -4,14 +4,19 @@ import (
 	"fmt"
 	"reflect"
 	"sync"
+	"sync/atomic"
 
 	"github.com/datamaskio/datamask/internal/reflectx"
 )
+
+// maskerSeq issues Masker IDs.
+var maskerSeq atomic.Uint64
 
 // Masker is the core redaction engine. Create one with New and reuse it
 // across goroutines. A zero-value Masker is not usable; always use New.
 type Masker struct {
 	cfg     Config
+	id      uint64    // unique per New call; audit metadata only
 	schemas *sync.Map // map[reflect.Type]*compiledSchema; nil means not created by New
 }
 
@@ -22,6 +27,7 @@ func New(opts ...Option) *Masker {
 		cfg: Config{
 			DetectSecrets: true,
 		},
+		id:      maskerSeq.Add(1),
 		schemas: &sync.Map{},
 	}
 	for _, o := range opts {

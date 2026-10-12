@@ -34,16 +34,17 @@ const (
 	TransformPartial  = reflectx.TransformPartial
 )
 
-// CompileWarning describes a non-fatal issue found during Schema compilation.
+// CompileWarning describes a non-fatal issue found during Schema compilation:
+// a field whose masking cannot be verified at compile time.
 type CompileWarning struct {
-	FieldPath string // "User.Email"
-	TagValue  string // original tag value, e.g. "hash"
+	FieldPath string // "User.Payload"
 	Reason    string // human-readable explanation
 }
 
 // SchemaMetadata holds lifecycle information about a compiled Schema.
 type SchemaMetadata struct {
-	TypeName  string    // struct name, e.g. "User"
-	MaskerID  uint64    // identity of the Masker that compiled the Schema
-	CreatedAt time.Time // when Compile was called
+	TypeName  string    // type name, e.g. "User"
+	MaskerID  uint64    // ID of the Masker that compiled the Schema
+	Version   string    // library version that compiled the Schema
+	CreatedAt time.Time // when the plan was first compiled
 }

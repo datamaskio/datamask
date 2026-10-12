@@ -16,4 +16,9 @@ type FieldMeta struct {
 	Index     []int
 	DataType  DataType
 	Transform Transform
+	Path      string // dot-separated Go field path, e.g. "Contact.Email"
+	GoType    string // field type as written in Go, e.g. "string", "*string"
+	// Unexported is true when the leaf field is unexported, so it can never
+	// be masked; Compile rejects such schemas (ErrInvalidSchema).
+	Unexported bool
 }
