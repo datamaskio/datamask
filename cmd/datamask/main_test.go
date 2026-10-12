@@ -296,3 +296,39 @@ func TestRunBadFlag(t *testing.T) {
 		t.Errorf("run with bad flag: exit code = %d, want 1", code)
 	}
 }
+
+func TestRunCheckFailsOnStaleGeneratedFile(t *testing.T) {
+	dir := t.TempDir()
+	write := func(src string) {
+		if err := os.WriteFile(filepath.Join(dir, "p.go"), []byte("package p\n"+src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("type T struct{ A string `mask:\"secret\"` }\n")
+	if code := run([]string{dir}); code != 0 {
+		t.Fatalf("generate exit code = %d", code)
+	}
+	if code := run([]string{"--check", dir}); code != 0 {
+		t.Fatalf("check on fresh output exit code = %d", code)
+	}
+
+	write("type T struct{ A string `mask:\"secret,hash\"` }\n")
+	if code := run([]string{"--check", dir}); code != 1 {
+		t.Errorf("check with a stale generated file: exit code = %d, want 1", code)
+	}
+	if code := run([]string{"--dry-run", dir}); code != 0 {
+		t.Errorf("dry-run exit code = %d", code)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "p_datamask.go")); err != nil {
+		t.Errorf("--check and --dry-run must not touch files: %v", err)
+	}
+	if code := run([]string{dir}); code != 0 {
+		t.Errorf("regenerate exit code = %d", code)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "p_datamask.go")); !os.IsNotExist(err) {
+		t.Errorf("generate should remove the stale file (stat err: %v)", err)
+	}
+	if code := run([]string{"--check", dir}); code != 0 {
+		t.Errorf("check after cleanup exit code = %d", code)
+	}
+}

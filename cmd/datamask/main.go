@@ -47,14 +47,18 @@ func run(args []string) int {
 					exitCode = 1
 				}
 			case *dryRun:
-				files, err := codegen.GeneratedFiles(pkg)
+				res, err := codegen.Analyze(pkg)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "datamask: %s: %v\n", pkg, err)
 					exitCode = 1
 					continue
 				}
-				for _, f := range files {
+				printWarnings(res)
+				for _, f := range res.Files {
 					fmt.Printf("--- %s ---\n%s\n", f.Path, string(f.Content))
+				}
+				for _, stale := range res.Stale {
+					fmt.Printf("--- %s ---\n(would be removed: nothing to generate)\n", stale)
 				}
 			default:
 				if err := codegen.Generate(pkg); err != nil {
@@ -123,11 +127,15 @@ func walkPackages(root string) ([]string, error) {
 // checkGenerated verifies that generated files in pkgPath are up to date.
 // Returns nil if they match, or an error describing the difference.
 func checkGenerated(pkgPath string) error {
-	files, err := codegen.GeneratedFiles(pkgPath)
+	res, err := codegen.Analyze(pkgPath)
 	if err != nil {
 		return fmt.Errorf("generation failed: %w", err)
 	}
-	for _, gen := range files {
+	printWarnings(res)
+	for _, stale := range res.Stale {
+		return fmt.Errorf("%s is stale: nothing in the package needs generated code any more — run 'datamask generate %s'", stale, pkgPath)
+	}
+	for _, gen := range res.Files {
 		existing, err := os.ReadFile(gen.Path)
 		if err != nil {
 			if os.IsNotExist(err) {
@@ -140,4 +148,11 @@ func checkGenerated(pkgPath string) error {
 		}
 	}
 	return nil
+}
+
+// printWarnings reports skipped types on stderr.
+func printWarnings(res codegen.Result) {
+	for _, w := range res.Warnings {
+		fmt.Fprintln(os.Stderr, w)
+	}
 }

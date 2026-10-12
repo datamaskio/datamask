@@ -1,6 +1,7 @@
 package datamask
 
 import (
+	"errors"
 	"reflect"
 	"strings"
 
@@ -50,76 +51,18 @@ func parseTags(t reflect.Type) (*reflectx.TypeMeta, error) {
 	return meta, firstErr
 }
 
-// parseTagValue parses a mask tag value into a DataType and Transform.
-// Callers filter out mask:"-" before calling.
+// parseTagValue parses a mask tag value into a DataType and Transform using
+// the shared parser, mapping its errors to the public sentinels. Callers
+// filter out mask:"-" before calling.
 func parseTagValue(tag string) (reflectx.DataType, reflectx.Transform, error) {
-	dtStr, rest, hasTransform := strings.Cut(tag, ",")
-	dt := dataTypeFromString(strings.TrimSpace(dtStr))
-	if dt == reflectx.DataTypeUnknown {
+	dt, tr, err := reflectx.ParseTag(tag)
+	switch {
+	case errors.Is(err, reflectx.ErrUnknownDataType):
 		return reflectx.DataTypeUnknown, 0, ErrUnknownDataType
-	}
-	if !hasTransform {
-		return dt, reflectx.TransformRedact, nil
-	}
-
-	// Only the first token after the data type is the transform; the rest
-	// are options and are ignored.
-	trStr, _, _ := strings.Cut(rest, ",")
-	trStr, _, _ = strings.Cut(trStr, "=")
-	trStr = strings.TrimSpace(trStr)
-	if !isKnownTransform(trStr) {
+	case errors.Is(err, reflectx.ErrUnknownTransform):
 		return reflectx.DataTypeUnknown, 0, ErrUnknownTransform
 	}
-	return dt, transformFromString(trStr), nil
-}
-
-// dataTypeFromString maps a string to a DataType.
-func dataTypeFromString(s string) reflectx.DataType {
-	switch strings.ToLower(s) {
-	case "email":
-		return reflectx.DataTypeEmail
-	case "phone":
-		return reflectx.DataTypePhone
-	case "ssn":
-		return reflectx.DataTypeSSN
-	case "credit-card", "creditcard":
-		return reflectx.DataTypeCreditCard
-	case "password":
-		return reflectx.DataTypePassword
-	case "secret":
-		return reflectx.DataTypeSecret
-	case "api-key", "apikey":
-		return reflectx.DataTypeAPIKey
-	case "jwt":
-		return reflectx.DataTypeJWT
-	default:
-		return reflectx.DataTypeUnknown
-	}
-}
-
-// transformFromString maps a string to a Transform.
-func transformFromString(s string) reflectx.Transform {
-	switch strings.ToLower(s) {
-	case "redact":
-		return reflectx.TransformRedact
-	case "hash":
-		return reflectx.TransformHash
-	case "tokenize":
-		return reflectx.TransformTokenize
-	case "partial":
-		return reflectx.TransformPartial
-	default:
-		return reflectx.TransformRedact
-	}
-}
-
-// isKnownTransform reports whether s is a recognized transform string.
-func isKnownTransform(s string) bool {
-	switch strings.ToLower(s) {
-	case "redact", "hash", "tokenize", "partial":
-		return true
-	}
-	return false
+	return dt, tr, err
 }
 
 // discoverFields walks the struct type t and calls onField for each field

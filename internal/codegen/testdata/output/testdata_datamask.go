@@ -8,7 +8,16 @@ import (
 	"github.com/datamaskio/datamask"
 )
 
-var _masker = datamask.New()
+func (a Account) Mask() (any, error) {
+	a.ID = "[REDACTED]"
+	if a.Backup != nil {
+		redacted := UserID("[REDACTED]")
+		a.Backup = &redacted
+	}
+	return a, nil
+}
+
+var _ datamask.Maskable = Account{}
 
 func (c Config) Mask() (any, error) {
 	if c.Token != nil {
@@ -19,6 +28,20 @@ func (c Config) Mask() (any, error) {
 }
 
 var _ datamask.Maskable = Config{}
+
+func (c Customer) Mask() (any, error) {
+	c.Email = "[REDACTED]"
+	return c, nil
+}
+
+var _ datamask.Maskable = Customer{}
+
+func (e Employee) Mask() (any, error) {
+	e.Phone = "[REDACTED]"
+	return e, nil
+}
+
+var _ datamask.Maskable = Employee{}
 
 func (u User) Mask() (any, error) {
 	u.Email = "[REDACTED]"
@@ -75,14 +98,3 @@ func (w WithOmit) Mask() (any, error) {
 }
 
 var _ datamask.Maskable = WithOmit{}
-
-func (w Wrapper[T]) Mask() (any, error) {
-	masked, err := datamask.Redact(_masker, w)
-	if err != nil {
-		return Wrapper[T]{}, err
-	}
-	return masked, nil
-}
-
-var _ datamask.Maskable = Wrapper[string]{}
-

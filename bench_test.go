@@ -216,3 +216,72 @@ func BenchmarkRedactParallel(b *testing.B) {
 		}
 	})
 }
+
+// -- Policy and generated-style Mask() --
+
+func BenchmarkApplyPolicy(b *testing.B) {
+	m := New(WithHashKey("k"))
+	user := benchUser{Name: "John Doe", Email: "john@example.com", Phone: "+1-555-1234", SSN: "123-45-6789"}
+	p := m.RedactPII()
+	b.ReportAllocs()
+	for b.Loop() {
+		_, _ = Apply(m, user, p)
+	}
+}
+
+func BenchmarkSchemaApplyPolicy(b *testing.B) {
+	m := New(WithHashKey("k"))
+	s := MustCompile[benchUser](m)
+	user := benchUser{Name: "John Doe", Email: "john@example.com", Phone: "+1-555-1234", SSN: "123-45-6789"}
+	p := m.RedactPII()
+	b.ReportAllocs()
+	for b.Loop() {
+		_, _ = s.Apply(user, p)
+	}
+}
+
+func BenchmarkCompose(b *testing.B) {
+	m := New()
+	b.ReportAllocs()
+	for b.Loop() {
+		_ = Compose(m.RedactPII(), m.HashEmails())
+	}
+}
+
+// benchGenerated mirrors what `datamask generate` emits for benchUser.
+type benchGenerated struct {
+	Name  string
+	Email string
+	Phone string
+	SSN   string
+}
+
+func (g benchGenerated) Mask() (any, error) {
+	g.Email = "[REDACTED]"
+	g.Phone = "[REDACTED]"
+	g.SSN = "[REDACTED]"
+	return g, nil
+}
+
+var benchSink any
+
+// The generated method called directly: the floor for generated code.
+func BenchmarkGeneratedMaskDirect(b *testing.B) {
+	g := benchGenerated{Name: "John Doe", Email: "john@example.com", Phone: "+1-555-1234", SSN: "123-45-6789"}
+	b.ReportAllocs()
+	for b.Loop() {
+		benchSink, _ = g.Mask()
+	}
+}
+
+// The same type reached through Redact: Maskable wins, so this is the
+// "transparent upgrade" path and avoids the reflection walk entirely.
+func BenchmarkGeneratedMaskViaRedact(b *testing.B) {
+	m := New()
+	g := benchGenerated{Name: "John Doe", Email: "john@example.com", Phone: "+1-555-1234", SSN: "123-45-6789"}
+	s := MustCompile[benchGenerated](m)
+	b.ReportAllocs()
+	for b.Loop() {
+		_, _ = s.Redact(g)
+	}
+}
